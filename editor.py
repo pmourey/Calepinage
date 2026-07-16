@@ -33,7 +33,7 @@ MENU_SAVE = pygame.USEREVENT + 3
 MENU_QUIT = pygame.USEREVENT + 4
 
 SCALE = 2.35  # pixels par cm
-GRID_ORIGIN = (280, 40)  # position (px) du coin haut-gauche de la grille
+GRID_ORIGIN = (200, 40)  # position (px) du coin haut-gauche de la grille — déplacé vers la gauche pour réduire l'espace menu
 SNAP_STEP = 5  # cm
 EDGE_SNAP_TOL = 10  # cm : distance de "magnétisme" aux bords voisins / à la pièce
 ND = 3       # nombre de décimales conservées pour toute coordonnée (cm)
@@ -149,7 +149,10 @@ class Editor:
     def __init__(self):
         pygame.init()
         pygame.display.set_caption("Éditeur de calepinage - drag & drop")
-        self.win_w, self.win_h = 980, 760
+        # ensure initial window is wide enough for grid + side panel
+        room_w_px = int(ROOM_W * SCALE)
+        min_width = GRID_ORIGIN[0] + room_w_px + 260
+        self.win_w, self.win_h = max(980, min_width), 760
         self.screen = pygame.display.set_mode((self.win_w, self.win_h),
                                                pygame.RESIZABLE)
         self.font = pygame.font.SysFont("Arial", 15)
@@ -181,16 +184,39 @@ class Editor:
 
     # ---------- palette ----------
     def palette_rects(self):
-        """Retourne [(rect_px, palette_item)] pour zone de droite."""
+        """Retourne [(rect_px, palette_item)] pour zone de droite, disposés en grille."""
         items = []
-        base_x = self.win_w - 190
-        y = 90
-        for item in PALETTE:
+        room_w_px = int(ROOM_W * SCALE)
+        preferred_x = self.win_w - 210
+        min_x = GRID_ORIGIN[0] + room_w_px + 20
+        base_x = max(preferred_x, min_x)
+        # grid layout to save vertical space
+        cols = 2
+        cell_w = 90
+        cell_h = 80
+        x0 = base_x - 10
+        y0 = 90
+        for idx, item in enumerate(PALETTE):
+            col = idx % cols
+            row = idx // cols
+            x = x0 + col * (cell_w + 12)
+            y = y0 + row * (cell_h + 18)
             fmt, w, h, orient, color = item
-            disp_w, disp_h = w * 1.15, h * 1.15
-            rect = pygame.Rect(base_x + (70 - disp_w / 2), y, disp_w, disp_h)
+            # represent tile size scaled for visual (cm -> px using SCALE)
+            # compute display size preserving tile proportions (cm->px via SCALE)
+            natural_w = w * SCALE
+            natural_h = h * SCALE
+            max_w = cell_w - 16
+            max_h = cell_h - 28
+            if natural_w <= 0 or natural_h <= 0:
+                scale = 1.0
+            else:
+                scale = min(1.0, max_w / natural_w, max_h / natural_h)
+            disp_w = max(8, int(natural_w * scale))
+            disp_h = max(8, int(natural_h * scale))
+            # center within cell
+            rect = pygame.Rect(x + (cell_w - disp_w) // 2, y + 8 + (cell_h - 28 - disp_h) // 2, disp_w, disp_h)
             items.append((rect, item))
-            y += max(disp_h, 40) + 18
         return items
 
     # ---------- rendu ----------
@@ -251,7 +277,11 @@ class Editor:
 
     def draw_palette(self):
         surf = self.screen
-        base_x = self.win_w - 210
+        # ensure palette is placed to the right of the grid to avoid overlap
+        room_w_px = int(ROOM_W * SCALE)
+        preferred_x = self.win_w - 210
+        min_x = GRID_ORIGIN[0] + room_w_px + 20
+        base_x = max(preferred_x, min_x)
         title = self.font_bold.render("PALETTE (glisser-déposer)", True, (30, 25, 20))
         surf.blit(title, (base_x - 10, 55))
         for rect, item in self.palette_rects():
@@ -265,8 +295,18 @@ class Editor:
 
     def draw_side_info(self):
         surf = self.screen
-        base_x = self.win_w - 210
-        y = 340
+        # align side info with the palette and ensure it is right of the grid
+        room_w_px = int(ROOM_W * SCALE)
+        preferred_x = self.win_w - 210
+        min_x = GRID_ORIGIN[0] + room_w_px + 20
+        base_x = max(preferred_x, min_x)
+        # place quantitative section below the palette grid to avoid overlap
+        # compute palette footprint
+        cols = 2
+        cell_h = 80
+        y0 = 90
+        rows = (len(PALETTE) + cols - 1) // cols
+        y = y0 + rows * (cell_h + 18) + 12
         counts = {"50x50": 0, "30x50": 0, "30x30": 0}
         for t in self.tiles:
             counts[t.fmt] += 1
@@ -292,7 +332,9 @@ class Editor:
             surf.blit(f.render(text, True, (35, 30, 25)), (base_x - 10, y))
             y += 22
 
-        help_y = self.win_h - 150
+        # move help lines to bottom-left of the main window
+        help_x = 12
+        help_y = self.win_h - 140
         help_lines = [
             "Clic-glisser palette -> pose",
             "Clic-glisser carreau -> déplace",
@@ -301,10 +343,8 @@ class Editor:
             "Suppr : supprimer sélection",
             "C : tout effacer   S : exporter",
         ]
-        for line in help_lines:
-            surf.blit(self.font_small.render(line, True, (90, 85, 75)),
-                       (base_x - 10, help_y))
-            help_y += 18
+        for i, line in enumerate(help_lines):
+            surf.blit(self.font_small.render(line, True, (90, 85, 75)), (help_x, help_y + i * 18))
 
     def draw_message(self):
         if self.message and pygame.time.get_ticks() < self.message_timer:
@@ -557,17 +597,13 @@ class Editor:
 
     def list_projects(self):
         d = self._projects_dir()
-        names = set()
-        for f in os.listdir(d):
+        names = []
+        for f in sorted(os.listdir(d)):
             full = os.path.join(d, f)
-            if f.endswith('.json') and os.path.isfile(full):
-                # legacy flat layout: projects/<name>.json
-                names.add(f[:-5])
-            elif os.path.isdir(full):
-                # current layout: projects/<name>/<name>.json
-                if os.path.exists(os.path.join(full, f"{f}.json")):
-                    names.add(f)
-        return sorted(names)
+            # current canonical layout: projects/<name>/<name>.json
+            if os.path.isdir(full) and os.path.exists(os.path.join(full, f"{f}.json")):
+                names.append(f)
+        return names
 
     def save_project(self, name: str):
         if not name:
@@ -626,11 +662,8 @@ class Editor:
 
     def load_project(self, name: str):
         d = self._projects_dir()
-        # current layout: projects/<name>/<name>.json
+        # canonical layout only: projects/<name>/<name>.json
         path = os.path.join(d, name, f"{name}.json")
-        if not os.path.exists(path):
-            # legacy flat layout: projects/<name>.json
-            path = os.path.join(d, f"{name}.json")
         json_exists = os.path.exists(path)
         csv_path = os.path.join(d, name, f"{name}.csv")
         csv_exists = os.path.exists(csv_path)
@@ -995,9 +1028,19 @@ class Editor:
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.VIDEORESIZE:
-                    self.win_w, self.win_h = event.w, event.h
+                    # enforce a minimum width so grid and side panel don't overlap
+                    room_w_px = int(ROOM_W * SCALE)
+                    min_width = GRID_ORIGIN[0] + room_w_px + 260  # grid origin + grid + side panel + margin
+                    self.win_w = max(event.w, min_width)
+                    self.win_h = max(event.h, 480)
                     self.screen = pygame.display.set_mode(
                         (self.win_w, self.win_h), pygame.RESIZABLE)
+                    # notify user if requested size was too small
+                    if event.w < min_width:
+                        self.set_message(f"Fenêtre trop petite — largeur minimale: {min_width}px", duration_ms=4000)
+                    else:
+                        # clear any previous size warning
+                        self.message_timer = 0
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     self.handle_mousedown(event)
                 elif event.type == pygame.MOUSEBUTTONUP:
