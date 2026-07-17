@@ -43,7 +43,8 @@ EPS = 0.01   # tolérance (cm) pour les comparaisons de bords / chevauchements
 # Palette construite dynamiquement à partir de dallage/geometry.py : ajouter,
 # retirer ou modifier un format dans geometry.FORMATS suffit à mettre à jour
 # l'éditeur (aucune taille n'est plus codée en dur ici).
-PALETTE = all_pieces()  # [(fmt, w, h, orientation, couleur), ...]
+# Default palette from geometry; per-project palette stored on the Editor instance
+# PALETTE removed; instances use self.palette = all_pieces()
 
 
 def R(v):
@@ -164,6 +165,10 @@ class Editor:
         self.tiles = []  # PlacedTile list
         self.snap_on = True
         self.selected = None  # PlacedTile
+        # project-specific settings (set during new project or load)
+        self.project_formats = None
+        self.joint_mm = JOINT_MM if 'JOINT_MM' in globals() else 5
+        self.palette = all_pieces()
 
         # état du drag
         self.dragging = None  # dict: kind='new'/'move', tile info, offset
@@ -197,7 +202,7 @@ class Editor:
         cell_h = 80
         x0 = base_x - 10
         y0 = 90
-        for idx, item in enumerate(PALETTE):
+        for idx, item in enumerate(self.palette):
             col = idx % cols
             row = idx // cols
             x = x0 + col * (cell_w + 12)
@@ -616,6 +621,10 @@ class Editor:
         data = {
             'room_w': ROOM_W,
             'room_h': ROOM_H,
+            'joint_mm': self.joint_mm,
+            'palette': [
+                {'name': p[0], 'w': p[1], 'h': p[2], 'orientation': p[3], 'color': p[4]} for p in self.palette
+            ],
             'tiles': [
                 {'id': t.id, 'x': t.x, 'y': t.y, 'w': t.w, 'h': t.h,
                  'fmt': t.fmt, 'orientation': t.orientation,
@@ -698,6 +707,11 @@ class Editor:
         if os.path.exists(path):
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
+            # load project-level settings if present
+            self.joint_mm = data.get('joint_mm', self.joint_mm)
+            pal = data.get('palette') or []
+            if pal:
+                self.palette = [(p.get('name'), p.get('w'), p.get('h'), p.get('orientation'), p.get('color')) for p in pal]
             tiles_from_json = data.get('tiles', []) or []
             self.tiles.clear()
             for td in tiles_from_json:
@@ -945,7 +959,7 @@ class Editor:
                 if selected:
                     if selected == '__new__':
                         # create new project: ask for name, initialize empty project
-                        name = self._prompt_text('Nom du nouveau projet :', default='mon_calepinage')
+                                        name = self._prompt_text('Nom du nouveau projet :', default='mon_calepinage')
                         if name:
                             # ensure unique name
                             if name in projects:
@@ -955,9 +969,40 @@ class Editor:
                                 else:
                                     self.load_project(name)
                             else:
-                                # initialize empty state and save
+                                # Ask for joint width
+                                joint_s = self._prompt_text('Largeur de joint recommandée (mm) :', default=str(self.joint_mm))
+                                try:
+                                    joint_val = float(joint_s) if joint_s else self.joint_mm
+                                except Exception:
+                                    joint_val = self.joint_mm
+                                # Ask number of tile formats
+                                n_s = self._prompt_text('Nombre de formats de carreaux à définir :', default='2')
+                                try:
+                                    n = max(1, int(n_s))
+                                except Exception:
+                                    n = 2
+                                palette = []
+                                for i in range(n):
+                                    fmt_name = self._prompt_text(f'Nom format #{i+1} (ex: 30x50) :', default=f'{30+i*10}x{30+i*10}')
+                                    dim_s = self._prompt_text(f'Dimensions (LxH en cm) pour {fmt_name} (ex: 30x50) :', default='30x30')
+                                    color = self._prompt_text(f'Couleur hex pour {fmt_name} (ex: #f8f4e6) :', default=None)
+                                    try:
+                                        w_s, h_s = dim_s.lower().split('x')
+                                        w = float(w_s)
+                                        h = float(h_s)
+                                    except Exception:
+                                        w, h = 30.0, 30.0
+                                    if not color:
+                                        # pick a simple generated color based on index
+                                        base = 200 - (i*30 % 120)
+                                        color = f'#{base:02x}{(150+i*20)%256:02x}{(120+i*40)%256:02x}'
+                                    orientation = 'H' if w >= h else 'V'
+                                    palette.append((fmt_name, w, h, orientation, color))
+                                # initialize empty state and save with project-specific palette and joint
                                 self.tiles.clear()
                                 self.current_project = name
+                                self.palette = palette
+                                self.joint_mm = joint_val
                                 self.save_project(name)
                         else:
                             self.set_message('Création de projet annulée')
