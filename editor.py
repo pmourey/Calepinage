@@ -767,6 +767,65 @@ class Editor:
             clock.tick(30)
         return None
 
+    def _prompt_color_picker(self, title: str) -> str:
+        """Affiche un modal simple avec quelques swatches de couleur et retourne un hex."""
+        presets = ['#f8f4e6', '#e6e2d0', '#dcd6c3', '#c8bfb1', '#b0a89c', '#9aa395']
+        font = pygame.font.SysFont(None, 20)
+        clock = pygame.time.Clock()
+        s_w, s_h = 400, 140
+        win = pygame.Surface((s_w, s_h))
+        selected = 0
+        running = True
+        while running:
+            for ev in pygame.event.get():
+                if ev.type == pygame.QUIT:
+                    return presets[0]
+                if ev.type == pygame.KEYDOWN:
+                    if ev.key == pygame.K_ESCAPE:
+                        return presets[0]
+                    elif ev.key == pygame.K_RETURN:
+                        return presets[selected]
+                    elif ev.key == pygame.K_RIGHT:
+                        selected = (selected + 1) % len(presets)
+                    elif ev.key == pygame.K_LEFT:
+                        selected = (selected - 1) % len(presets)
+                elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+                    mx, my = ev.pos
+                    sw_x = (self.screen.get_width() - s_w) // 2
+                    sw_y = (self.screen.get_height() - s_h) // 2
+                    rel_x = mx - sw_x
+                    rel_y = my - sw_y
+                    if 10 <= rel_y <= 60:
+                        # click on swatch row
+                        idx = rel_x // 60
+                        if 0 <= idx < len(presets):
+                            selected = idx
+                    # confirm area
+                    if 80 <= rel_y <= 110 and 140 <= rel_x <= 260:
+                        return presets[selected]
+            # draw
+            win.fill((250, 250, 250))
+            pygame.draw.rect(win, (10, 10, 10), (0, 0, s_w, s_h), 2)
+            lbl = font.render(title + ' (← → pour naviguer, Entrée pour valider)', True, (20, 20, 20))
+            win.blit(lbl, (10, 8))
+            # swatches
+            for i, c in enumerate(presets):
+                x = 10 + i * 60
+                pygame.draw.rect(win, pygame.Color(c), (x, 30, 50, 40))
+                if i == selected:
+                    pygame.draw.rect(win, (0, 0, 0), (x-2, 28, 54, 44), 2)
+            # confirm button
+            pygame.draw.rect(win, (200, 200, 200), (140, 80, 120, 30))
+            cb = font.render('Valider', True, (10, 10, 10))
+            win.blit(cb, (170, 86))
+            # blit
+            sw_x = (self.screen.get_width() - s_w) // 2
+            sw_y = (self.screen.get_height() - s_h) // 2
+            self.screen.blit(win, (sw_x, sw_y))
+            pygame.display.flip()
+            clock.tick(30)
+        return presets[0]
+
     def _confirm(self, message: str) -> bool:
         """Simple confirmation modal: Enter = yes, Esc = no."""
         res = self._prompt_text(message + " (Entrée=oui, Echap=non)", default="")
@@ -958,61 +1017,58 @@ class Editor:
                 selected = self._select_project_modal()
                 if selected:
                     if selected == '__new__':
-                        # create new project: ask for name, initialize empty project
+                                        # create new project: ask for name, initialize empty project
                                         name = self._prompt_text('Nom du nouveau projet :', default='mon_calepinage')
-                        if name:
-                            # ensure unique name
-                            if name in projects:
-                                if not self._confirm(f"Le projet '{name}' existe déjà. Le sélectionner à la place ?"):
-                                    # ask for a different name
-                                    self.set_message('Création annulée : nom en conflit')
-                                else:
-                                    self.load_project(name)
-                            else:
-                                # Ask for joint width
-                                joint_s = self._prompt_text('Largeur de joint recommandée (mm) :', default=str(self.joint_mm))
-                                try:
-                                    joint_val = float(joint_s) if joint_s else self.joint_mm
-                                except Exception:
-                                    joint_val = self.joint_mm
-                                # Ask number of tile formats
-                                n_s = self._prompt_text('Nombre de formats de carreaux à définir :', default='2')
-                                try:
-                                    n = max(1, int(n_s))
-                                except Exception:
-                                    n = 2
-                                palette = []
-                                for i in range(n):
-                                    fmt_name = self._prompt_text(f'Nom format #{i+1} (ex: 30x50) :', default=f'{30+i*10}x{30+i*10}')
-                                    dim_s = self._prompt_text(f'Dimensions (LxH en cm) pour {fmt_name} (ex: 30x50) :', default='30x30')
-                                    color = self._prompt_text(f'Couleur hex pour {fmt_name} (ex: #f8f4e6) :', default=None)
-                                    try:
-                                        w_s, h_s = dim_s.lower().split('x')
-                                        w = float(w_s)
-                                        h = float(h_s)
-                                    except Exception:
-                                        w, h = 30.0, 30.0
-                                    if not color:
-                                        # pick a simple generated color based on index
-                                        base = 200 - (i*30 % 120)
-                                        color = f'#{base:02x}{(150+i*20)%256:02x}{(120+i*40)%256:02x}'
-                                    orientation = 'H' if w >= h else 'V'
-                                    palette.append((fmt_name, w, h, orientation, color))
-                                # initialize empty state and save with project-specific palette and joint
-                                self.tiles.clear()
-                                self.current_project = name
-                                self.palette = palette
-                                self.joint_mm = joint_val
-                                self.save_project(name)
-                        else:
-                            self.set_message('Création de projet annulée')
+                                        if not name:
+                                            self.set_message('Création de projet annulée')
+                                        else:
+                                            # ensure unique name
+                                            if name in projects:
+                                                if not self._confirm(f"Le projet '{name}' existe déjà. Le sélectionner à la place ?"):
+                                                    self.set_message('Création annulée : nom en conflit')
+                                                    continue
+                                                else:
+                                                    self.load_project(name)
+                                                    continue
+                                            # Ask for joint width
+                                            joint_s = self._prompt_text('Largeur de joint recommandée (mm) :', default=str(self.joint_mm))
+                                            try:
+                                                joint_val = float(joint_s) if joint_s else self.joint_mm
+                                            except Exception:
+                                                joint_val = self.joint_mm
+                                            # Ask number of tile formats
+                                            n_s = self._prompt_text('Nombre de formats de carreaux à définir :', default='2')
+                                            try:
+                                                n = max(1, int(n_s))
+                                            except Exception:
+                                                n = 2
+                                            palette = []
+                                            for i in range(n):
+                                                fmt_name = self._prompt_text(f'Nom format #{i+1} (ex: 30x50) :', default=f'{30+i*10}x{30+i*10}')
+                                                dim_s = self._prompt_text(f'Dimensions (LxH en cm) pour {fmt_name} (ex: 30x50) :', default='30x30')
+                                                # use color picker modal instead of free text
+                                                color = self._prompt_color_picker(f'Choisir couleur pour {fmt_name}')
+                                                try:
+                                                    w_s, h_s = dim_s.lower().split('x')
+                                                    w = float(w_s)
+                                                    h = float(h_s)
+                                                except Exception:
+                                                    w, h = 30.0, 30.0
+                                                orientation = 'H' if w >= h else 'V'
+                                                palette.append((fmt_name, w, h, orientation, color))
+                                            # initialize empty state and save with project-specific palette and joint
+                                            self.tiles.clear()
+                                            self.current_project = name
+                                            self.palette = palette
+                                            self.joint_mm = joint_val
+                                            self.save_project(name)
                     else:
-                        # add debug log when loading
-                        print(f"[DEBUG] Loading project '{selected}' — listing files in projects dir: {os.listdir(self._projects_dir())}")
-                        loaded = self.load_project(selected)
-                        print(f"[DEBUG] load_project returned: {loaded}; tiles count: {len(self.tiles)}")
-                        for i, t in enumerate(self.tiles, start=1):
-                            print(f"[DEBUG] tile {i}: {t.x},{t.y} {t.w}x{t.h} fmt={t.fmt} cut={t.cut_sides}")
+                                        # add debug log when loading
+                                        print(f"[DEBUG] Loading project '{selected}' — listing files in projects dir: {os.listdir(self._projects_dir())}")
+                                        loaded = self.load_project(selected)
+                                        print(f"[DEBUG] load_project returned: {loaded}; tiles count: {len(self.tiles)}")
+                                        for i, t in enumerate(self.tiles, start=1):
+                                            print(f"[DEBUG] tile {i}: {t.x},{t.y} {t.w}x{t.h} fmt={t.fmt} cut={t.cut_sides}")
         running = True
         frame = 0
         while running:
