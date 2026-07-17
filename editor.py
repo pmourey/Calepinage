@@ -1017,51 +1017,8 @@ class Editor:
                 selected = self._select_project_modal()
                 if selected:
                     if selected == '__new__':
-                                        # create new project: ask for name, initialize empty project
-                                        name = self._prompt_text('Nom du nouveau projet :', default='mon_calepinage')
-                                        if not name:
-                                            self.set_message('Création de projet annulée')
-                                        else:
-                                            # ensure unique name
-                                            if name in projects:
-                                                if not self._confirm(f"Le projet '{name}' existe déjà. Le sélectionner à la place ?"):
-                                                    self.set_message('Création annulée : nom en conflit')
-                                                    continue
-                                                else:
-                                                    self.load_project(name)
-                                                    continue
-                                            # Ask for joint width
-                                            joint_s = self._prompt_text('Largeur de joint recommandée (mm) :', default=str(self.joint_mm))
-                                            try:
-                                                joint_val = float(joint_s) if joint_s else self.joint_mm
-                                            except Exception:
-                                                joint_val = self.joint_mm
-                                            # Ask number of tile formats
-                                            n_s = self._prompt_text('Nombre de formats de carreaux à définir :', default='2')
-                                            try:
-                                                n = max(1, int(n_s))
-                                            except Exception:
-                                                n = 2
-                                            palette = []
-                                            for i in range(n):
-                                                fmt_name = self._prompt_text(f'Nom format #{i+1} (ex: 30x50) :', default=f'{30+i*10}x{30+i*10}')
-                                                dim_s = self._prompt_text(f'Dimensions (LxH en cm) pour {fmt_name} (ex: 30x50) :', default='30x30')
-                                                # use color picker modal instead of free text
-                                                color = self._prompt_color_picker(f'Choisir couleur pour {fmt_name}')
-                                                try:
-                                                    w_s, h_s = dim_s.lower().split('x')
-                                                    w = float(w_s)
-                                                    h = float(h_s)
-                                                except Exception:
-                                                    w, h = 30.0, 30.0
-                                                orientation = 'H' if w >= h else 'V'
-                                                palette.append((fmt_name, w, h, orientation, color))
-                                            # initialize empty state and save with project-specific palette and joint
-                                            self.tiles.clear()
-                                            self.current_project = name
-                                            self.palette = palette
-                                            self.joint_mm = joint_val
-                                            self.save_project(name)
+                        # delegate full new-project flow to existing helper which uses modals
+                        self._menu_new()
                     else:
                                         # add debug log when loading
                                         print(f"[DEBUG] Loading project '{selected}' — listing files in projects dir: {os.listdir(self._projects_dir())}")
