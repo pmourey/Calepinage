@@ -21,6 +21,8 @@ import pygame
 import json
 
 from dallage.geometry import ROOM_W, ROOM_H, COLORS, all_pieces
+from dallage.render import render_plan, render_cuts, render_pose_table_png, render_3d
+from dallage.quantitatif import compute_quantitatif
 
 OUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -627,31 +629,17 @@ class Editor:
         path = os.path.join(proj_dir, f"{name}.json")
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
-        # generate exports (PNG + pose JSON) into project dir
+        # generate standard output files for editor projects: 1_plan, 2_pose, 4_decoupes, 5_vue3d, 6_fiche_carreleur
         try:
-            # snapshot PNG
-            room_w_px, room_h_px = int(ROOM_W * SCALE), int(ROOM_H * SCALE)
-            snapshot = pygame.Surface((room_w_px, room_h_px))
-            snapshot.fill((255, 255, 255))
-            for t in self.tiles:
-                x_px, y_px = t.x * SCALE, t.y * SCALE
-                w_px, h_px = t.w * SCALE, t.h * SCALE
-                r = pygame.Rect(x_px, y_px, w_px, h_px)
-                pygame.draw.rect(snapshot, pygame.Color(COLORS[t.fmt]), r)
-                pygame.draw.rect(snapshot, (75, 63, 47), r, 2)
-                for edge in t.cut_sides:
-                    if edge == "left":
-                        a, b = (x_px, y_px), (x_px, y_px + h_px)
-                    elif edge == "right":
-                        a, b = (x_px + w_px, y_px), (x_px + w_px, y_px + h_px)
-                    elif edge == "top":
-                        a, b = (x_px, y_px), (x_px + w_px, y_px)
-                    else:
-                        a, b = (x_px, y_px + h_px), (x_px + w_px, y_px + h_px)
-                    pygame.draw.line(snapshot, (210, 20, 20), a, b, 3)
-            png_path = os.path.join(proj_dir, f"{name}.png")
-            pygame.image.save(snapshot, png_path)
-            # write canonical project JSON into projects/<name>/<name>.json
+            # 1_plan.png
+            render_plan(self.tiles, name, os.path.join(proj_dir, f"{name}_1_plan.png"))
+            # 2_pose.png (visual pose table)
+            render_pose_table_png(self.tiles, name, os.path.join(proj_dir, f"{name}_2_pose.png"))
+            # 4_decoupes.png
+            render_cuts(self.tiles, name, os.path.join(proj_dir, f"{name}_4_decoupes.png"))
+            # 5_vue3d.png
+            render_3d(self.tiles, name, os.path.join(proj_dir, f"{name}_5_vue3d.png"))
+            # write canonical project JSON as <name>.json
             project_data = {
                 'room_w': ROOM_W,
                 'room_h': ROOM_H,
@@ -664,6 +652,23 @@ class Editor:
             }
             with open(os.path.join(proj_dir, f"{name}.json"), 'w', encoding='utf-8') as pf:
                 json.dump(project_data, pf, indent=2, ensure_ascii=False)
+            # 6_fiche_carreleur.md
+            q = compute_quantitatif(self.tiles)
+            quant_lines = [f"- {fmt} cm : {q.counts[fmt]} (à commander : {q.a_commander[fmt]})" for fmt in q.counts]
+            fiche_lines = [
+                f"# Fiche carreleur — {name}",
+                "",
+                f"- Dimensions de l'entrée de garage : {ROOM_W:.0f} x {ROOM_H:.0f} cm",
+                f"- Surface totale : {q.surface_totale_m2} m²",
+                "",
+                "## Quantitatif",
+                *quant_lines,
+                f"- Surface de carreaux à acheter : {q.surface_carreaux_posee_m2} m²",
+                f"- Chutes : {q.chutes_m2} m²  (taux de perte {q.taux_perte_pct} %)",
+                f"- Nombre de découpes : {q.n_cuts}",
+            ]
+            with open(os.path.join(proj_dir, f"{name}_6_fiche_carreleur.md"), 'w', encoding='utf-8') as ff:
+                ff.write('\n'.join(fiche_lines))
         except Exception:
             # fallback: draw simple top menu buttons if graphics unavailable
             surf = self.screen

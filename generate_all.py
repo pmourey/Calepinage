@@ -11,6 +11,23 @@ from dallage.render import render_plan, render_cuts, render_pose_table_png, rend
 OUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 os.makedirs(OUT_DIR, exist_ok=True)
 
+# Write a description file describing the auto-generated patterns
+DESCRIPTION_PATH = os.path.join(OUT_DIR, "description.md")
+with open(DESCRIPTION_PATH, "w", encoding="utf-8") as ddf:
+    ddf.write("# Description des motifs auto-générés\n\n")
+    ddf.write("Ce dossier contient plusieurs propositions de calepinage générées automatiquement.\n")
+    ddf.write("Chaque motif produit les fichiers suivants :\n\n")
+    ddf.write("- 1_plan.png : plan de pose visuel\n")
+    ddf.write("- 2_pose.png : tableau de pose (aperçu)\n")
+    ddf.write("- 4_decoupes.png : vues des découpes\n")
+    ddf.write("- 5_vue3d.png : rendu 3D simplifié\n")
+    ddf.write("- 6_fiche_carreleur.md : fiche carreleur et quantitatif\n")
+    ddf.write("- <key>.json : données canoniques du projet (tiles, dimensions)\n\n")
+    ddf.write("Les motifs disponibles sont :\n\n")
+    for key, title in PATTERNS.items():
+        ddf.write(f"- {key} : {title}\n")
+    ddf.write("\nChaque motif est documenté par une fiche carreleur détaillée et un fichier JSON canonique utilisable pour réouvrir le projet dans l'éditeur.\n")
+
 POSE_ADVICE = {
     "contemporain": "Démarrer par le plus grand format (points d'ancrage), puis "
                      "compléter chaque bande avec les formats plus petits. "
