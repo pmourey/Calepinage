@@ -75,22 +75,20 @@ def main():
                                os.path.join(OUT_DIR, f"{key}_2_pose.png"))
         render_3d(tiles, title, os.path.join(OUT_DIR, f"{key}_5_vue3d.png"))
 
-        # plan de pose complet en JSON
-        pose_path = os.path.join(OUT_DIR, f"{key}_2_pose.json")
-        pose_list = []
-        for t in tiles:
-            pose_list.append({
-                "id": t.id,
-                "format": t.fmt,
-                "orientation": t.orientation or None,
-                "x_cm": round(t.x, 1),
-                "y_cm": round(t.y, 1),
-                "w_cm": round(t.w, 1),
-                "h_cm": round(t.h, 1),
-                "is_cut": bool(t.is_cut),
-            })
-        with open(pose_path, "w", encoding="utf-8") as f:
-            json.dump(pose_list, f, indent=2, ensure_ascii=False)
+        # write canonical project JSON into output/<key>.json
+        project_data = {
+            'room_w': ROOM_W,
+            'room_h': ROOM_H,
+            'tiles': [
+                {'id': t.id, 'x': t.x, 'y': t.y, 'w': t.w, 'h': t.h,
+                 'fmt': t.fmt, 'orientation': t.orientation,
+                 'base_w': getattr(t, 'base_w', t.w), 'base_h': getattr(t, 'base_h', t.h),
+                 'cut_sides': list(getattr(t, 'cut_sides', []))}
+                for t in tiles
+            ]
+        }
+        with open(os.path.join(OUT_DIR, f"{key}.json"), 'w', encoding='utf-8') as f:
+            json.dump(project_data, f, indent=2, ensure_ascii=False)
 
         fiche = fiche_carreleur_md(key, title, tiles, q)
         with open(os.path.join(OUT_DIR, f"{key}_6_fiche_carreleur.md"), "w",

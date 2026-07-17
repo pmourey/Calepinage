@@ -24,6 +24,7 @@ Chargement JSON
 Export
 
 - Les images PNG générées vont dans projects/<nom>/ quand un projet ouvert est renseigné. Sinon, elles vont dans output/.
+- Le fichier de données canonique est projects/<nom>/<nom>.json (ou output/<key>.json pour generate_all). Aucune sortie *_pose.json n'est produite.
 - L'export marque le projet comme sauvegardé (dirty=False).
 
 Interface & Raccourcis

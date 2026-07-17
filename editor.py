@@ -529,23 +529,19 @@ class Editor:
             png_path = os.path.join(OUT_DIR, f"{base_name}.png")
             pose_path = os.path.join(OUT_DIR, f"{base_name}_pose.json")
 
-        # export pose as JSON
-        pose_list = []
-        for t in self.tiles:
-            pose_list.append({
-                'id': t.id,
-                'format': t.fmt,
-                'orientation': t.orientation or None,
-                'x_cm': round(t.x, 1),
-                'y_cm': round(t.y, 1),
-                'w_cm': round(t.w, 1),
-                'h_cm': round(t.h, 1),
-                'base_w_cm': round(t.base_w, 1),
-                'base_h_cm': round(t.base_h, 1),
-                'is_cut': bool(t.is_cut),
-            })
+        # export project JSON (canonical filename: <name>.json)
+        project_data = {
+            'room_w': ROOM_W,
+            'room_h': ROOM_H,
+            'tiles': [
+                {'id': t.id, 'x': t.x, 'y': t.y, 'w': t.w, 'h': t.h,
+                 'fmt': t.fmt, 'orientation': t.orientation,
+                 'base_w': t.base_w, 'base_h': t.base_h,
+                 'cut_sides': list(t.cut_sides)} for t in self.tiles
+            ]
+        }
         with open(pose_path, 'w', encoding='utf-8') as f:
-            json.dump(pose_list, f, indent=2, ensure_ascii=False)
+            json.dump(project_data, f, indent=2, ensure_ascii=False)
 
         room_w_px, room_h_px = int(ROOM_W * SCALE), int(ROOM_H * SCALE)
         snapshot = pygame.Surface((room_w_px, room_h_px))
@@ -653,25 +649,21 @@ class Editor:
                     else:
                         a, b = (x_px, y_px + h_px), (x_px + w_px, y_px + h_px)
                     pygame.draw.line(snapshot, (210, 20, 20), a, b, 3)
-            png_path = os.path.join(proj_dir, f{"{name}.png"})
+            png_path = os.path.join(proj_dir, f"{name}.png")
             pygame.image.save(snapshot, png_path)
-            # pose JSON
-            pose_list = []
-            for t in self.tiles:
-                pose_list.append({
-                    'id': t.id,
-                    'format': t.fmt,
-                    'orientation': t.orientation or None,
-                    'x_cm': round(t.x, 1),
-                    'y_cm': round(t.y, 1),
-                    'w_cm': round(t.w, 1),
-                    'h_cm': round(t.h, 1),
-                    'base_w_cm': round(t.base_w, 1),
-                    'base_h_cm': round(t.base_h, 1),
-                    'is_cut': bool(t.is_cut),
-                })
-            with open(os.path.join(proj_dir, f"{name}_pose.json"), 'w', encoding='utf-8') as pf:
-                json.dump(pose_list, pf, indent=2, ensure_ascii=False)
+            # write canonical project JSON into projects/<name>/<name>.json
+            project_data = {
+                'room_w': ROOM_W,
+                'room_h': ROOM_H,
+                'tiles': [
+                    {'id': t.id, 'x': t.x, 'y': t.y, 'w': t.w, 'h': t.h,
+                     'fmt': t.fmt, 'orientation': t.orientation,
+                     'base_w': t.base_w, 'base_h': t.base_h,
+                     'cut_sides': list(t.cut_sides)} for t in self.tiles
+                ]
+            }
+            with open(os.path.join(proj_dir, f"{name}.json"), 'w', encoding='utf-8') as pf:
+                json.dump(project_data, pf, indent=2, ensure_ascii=False)
         except Exception:
             # fallback: draw simple top menu buttons if graphics unavailable
             surf = self.screen
