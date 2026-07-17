@@ -6,7 +6,7 @@ Dallage est un petit éditeur de tuiles (carreaux) basé sur Pygame permettant d
 
 Structure des sorties
 
-- Canonical project data: projects/<nom>/<nom>.json (source unique de vérité pour l'éditeur)
+- Canonical project data: projects/<nom>/<nom>.json
 - Exports produits lors de la sauvegarde ou de l'export :
   - <nom>_1_plan.png — plan de pose visuel
   - <nom>_2_pose.png — tableau / aperçu de pose
@@ -14,28 +14,16 @@ Structure des sorties
   - <nom>_5_vue3d.png — rendu 3D simplifié
   - <nom>_6_fiche_carreleur.md — fiche carreleur et quantitatif
 
-generate_all.py
-
-- Génère plusieurs propositions automatiques de calepinage dans output/. Pour chaque motif (clé):
-  - {key}_1_plan.png, {key}_2_pose.png, {key}_4_decoupes.png, {key}_5_vue3d.png, {key}_6_fiche_carreleur.md
-  - {key}.json — données canoniques réutilisables
-  - output/description.md — description des motifs générés
-
-Notes
-
-- Le format CSV n'est plus utilisé pour la persistance des projets. Le JSON canonique est le seul format de données.
-- Pour signaler un bug ou demander une fonctionnalité, ouvrir une issue en joignant un exemple de projet JSON et les logs d'exécution.
-
 ---
 
 Programmes et rôle
 
+- editor.py : interface Pygame pour créer/éditer manuellement des projets. La sauvegarde produit les fichiers standards dans projects/<nom>/ :
+  - <nom>_1_plan.png, <nom>_2_pose.png, <nom>_4_decoupes.png, <nom>_5_vue3d.png, <nom>_6_fiche_carreleur.md, <nom>.json
+  
 - generate_all.py : génération batch de propositions automatiques. Produit pour chaque motif dans output/ :
   - {key}_1_plan.png, {key}_2_pose.png, {key}_4_decoupes.png, {key}_5_vue3d.png, {key}_6_fiche_carreleur.md, {key}.json
   - output/description.md décrit les motifs générés.
-
-- editor.py : interface Pygame pour créer/éditer manuellement des projets. La sauvegarde produit les fichiers standards dans projects/<nom>/ :
-  - <nom>_1_plan.png, <nom>_2_pose.png, <nom>_4_decoupes.png, <nom>_5_vue3d.png, <nom>_6_fiche_carreleur.md, <nom>.json
 
 Structure technique
 
