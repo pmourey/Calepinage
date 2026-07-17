@@ -2,7 +2,31 @@ Dallage — Éditeur de carreaux
 
 Résumé
 
-Dallage est un petit éditeur de tuiles (carreaux) basé sur Pygame permettant de créer, charger, modifier et exporter des projets de dalles. Les projets sont stockés dans le répertoire projects/ sous la forme canonique projects/<nom>/<nom>.json (et .png). L'ancien agencement flat projects/<nom>.json n'est plus pris en charge.
+Dallage est un petit éditeur de tuiles (carreaux) basé sur Pygame permettant de créer, charger, modifier et exporter des projets de dalles. Les projets sont stockés dans le répertoire projects/ sous la forme canonique projects/<nom>/<nom>.json et projects/<nom>/<nom>_1_plan.png (plusieurs exports associés). L'ancien agencement flat projects/<nom>.json n'est plus pris en charge.
+
+Structure des sorties
+
+- Canonical project data: projects/<nom>/<nom>.json (source unique de vérité pour l'éditeur)
+- Exports produits lors de la sauvegarde ou de l'export :
+  - <nom>_1_plan.png — plan de pose visuel
+  - <nom>_2_pose.png — tableau / aperçu de pose
+  - <nom>_4_decoupes.png — vues des découpes
+  - <nom>_5_vue3d.png — rendu 3D simplifié
+  - <nom>_6_fiche_carreleur.md — fiche carreleur et quantitatif
+
+- Lorsque aucun projet n'est ouvert, les actions d'export écrivent dans le dossier output/ : output/<base>.json et les images correspondantes (output/<base>_1_plan.png, ...).
+
+generate_all.py
+
+- Génère plusieurs propositions automatiques de calepinage dans output/. Pour chaque motif (clé):
+  - {key}_1_plan.png, {key}_2_pose.png, {key}_4_decoupes.png, {key}_5_vue3d.png, {key}_6_fiche_carreleur.md
+  - {key}.json — données canoniques réutilisables
+  - output/description.md — description des motifs générés
+
+Notes
+
+- Le format CSV n'est plus utilisé pour la persistance des projets. Le JSON canonique est le seul format de données.
+- Pour signaler un bug ou demander une fonctionnalité, ouvrir une issue en joignant un exemple de projet JSON et les logs d'exécution.
 
 Fonctions principales
 
