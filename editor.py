@@ -11,10 +11,9 @@ Commandes :
   Suppr/BkSp : supprimer le carreau sélectionné
   G          : activer/désactiver l'aimantation à la grille (pas de 5 cm)
   C          : tout effacer
-  S          : exporter le calepinage (PNG + CSV) dans output/
+  S          : exporter le calepinage (PNG) dans output/
   Echap      : quitter
 """
-import csv
 import os
 import sys
 
@@ -564,7 +563,7 @@ class Editor:
         n_cuts = sum(1 for t in self.tiles if t.is_cut)
         # mark saved
         self.dirty = False
-        self.set_message(f"Exporté ({n_cuts} découpe(s)) : {csv_path} / {png_path}")
+        self.set_message(f"Exporté ({n_cuts} découpe(s)) : {png_path}")
 
         # proposer la sauvegarde du projet via dialogue pygame
         try:
@@ -627,15 +626,10 @@ class Editor:
         # also copy latest exports (if present in OUT_DIR) and rename to project name
         try:
             import shutil
-            csv_src = os.path.join(OUT_DIR, f"{name}.csv")
             png_src = os.path.join(OUT_DIR, f"{name}.png")
-            # fallback: also consider old generic names
-            if not os.path.exists(csv_src):
-                csv_src = os.path.join(OUT_DIR, "mon_calepinage.csv")
+            # fallback: also consider old generic name
             if not os.path.exists(png_src):
                 png_src = os.path.join(OUT_DIR, "mon_calepinage.png")
-            if os.path.exists(csv_src):
-                shutil.copy(csv_src, os.path.join(proj_dir, f"{name}.csv"))
             if os.path.exists(png_src):
                 shutil.copy(png_src, os.path.join(proj_dir, f"{name}.png"))
         except Exception:
@@ -664,23 +658,7 @@ class Editor:
         d = self._projects_dir()
         # canonical layout only: projects/<name>/<name>.json
         path = os.path.join(d, name, f"{name}.json")
-        json_exists = os.path.exists(path)
-        csv_path = os.path.join(d, name, f"{name}.csv")
-        csv_exists = os.path.exists(csv_path)
-
-        # If both exist, prefer the most recently modified file
-        chosen = None
-        if json_exists and csv_exists:
-            json_m = os.path.getmtime(path)
-            csv_m = os.path.getmtime(csv_path)
-            chosen = 'csv' if csv_m > json_m else 'json'
-        elif json_exists:
-            chosen = 'json'
-        elif csv_exists:
-            chosen = 'csv'
-
-        # Load according to chosen file
-        if chosen == 'json':
+        if os.path.exists(path):
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             tiles_from_json = data.get('tiles', []) or []
@@ -696,70 +674,6 @@ class Editor:
             self.dirty = False
             self.set_message(f"Projet chargé (JSON) : {name}")
             return True
-
-        # fallback: try to read a CSV (older flow) from project dir
-        if os.path.exists(csv_path):
-            try:
-                # detect delimiter and normalize headers
-                with open(csv_path, 'r', newline='', encoding='utf-8') as f:
-                    sample = f.read(2048)
-                    f.seek(0)
-                    try:
-                        dialect = csv.Sniffer().sniff(sample, delimiters=',;')
-                        delim = dialect.delimiter
-                    except Exception:
-                        delim = ','
-                    reader = csv.reader(f, delimiter=delim)
-                    headers = None
-                    rows = []
-                    for i, r in enumerate(reader):
-                        if i == 0:
-                            headers = [h.strip().lower().replace(' ', '_') for h in r]
-                        else:
-                            if any(cell.strip() for cell in r):
-                                rows.append(r)
-                if not headers or not rows:
-                    return False
-                # map header names to column index
-                hdr_idx = {h: idx for idx, h in enumerate(headers)}
-                def get_col(row, *names):
-                    for n in names:
-                        n2 = n.lower()
-                        if n2 in hdr_idx:
-                            return row[hdr_idx[n2]].strip()
-                    return ''
-                self.tiles.clear()
-                for r in rows:
-                    try:
-                        fmt = get_col(r, 'format', 'fmt') or None
-                        x_s = get_col(r, 'x_cm', 'x')
-                        y_s = get_col(r, 'y_cm', 'y')
-                        w_s = get_col(r, 'w_cm', 'w')
-                        h_s = get_col(r, 'h_cm', 'h')
-                        base_w_s = get_col(r, 'base_w_cm', 'base_w') or w_s
-                        base_h_s = get_col(r, 'base_h_cm', 'base_h') or h_s
-                        if not (x_s and y_s and w_s and h_s):
-                            # skip incomplete rows
-                            continue
-                        x = float(x_s)
-                        y = float(y_s)
-                        w = float(w_s)
-                        h = float(h_s)
-                        base_w = float(base_w_s)
-                        base_h = float(base_h_s)
-                        orientation = get_col(r, 'orientation') or None
-                        nt = PlacedTile(x, y, w, h, fmt, orientation, base_w=base_w, base_h=base_h)
-                        self.tiles.append(nt)
-                    except Exception:
-                        continue
-                self.current_project = name
-                # loaded from disk -> not dirty
-                self.dirty = False
-                self.set_message(f"Projet chargé (CSV) : {name}")
-                return True
-            except Exception as e:
-                print('[ERROR] loading CSV', e)
-                return False
         return False
 
     # ---------- simple pygame text prompt (modal) ----------

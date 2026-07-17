@@ -2,7 +2,7 @@ Dallage — Éditeur de carreaux
 
 Résumé
 
-Dallage est un petit éditeur de tuiles (carreaux) basé sur Pygame permettant de créer, charger, modifier et exporter des projets de dalles. Les projets sont stockés dans le répertoire projects/ sous la forme canonique projects/<nom>/<nom>.json (et éventuellement .csv/.png). L'ancien agencement flat projects/<nom>.json n'est plus pris en charge.
+Dallage est un petit éditeur de tuiles (carreaux) basé sur Pygame permettant de créer, charger, modifier et exporter des projets de dalles. Les projets sont stockés dans le répertoire projects/ sous la forme canonique projects/<nom>/<nom>.json (et .png). L'ancien agencement flat projects/<nom>.json n'est plus pris en charge.
 
 Fonctions principales
 
@@ -17,14 +17,13 @@ Fonctions principales
 - Quitter
   - Propose de sauvegarder si des modifications non enregistrées existent.
 
-Chargement CSV/JSON
+Chargement JSON
 
-- Lorsque JSON et CSV existent, le fichier le plus récent est priorisé pour éviter d'ouvrir une version obsolète.
-- Le parser CSV essaye de détecter le séparateur (',' ou ';') et normalise les en-têtes (ex: x, x_cm, X -> x). Les lignes incomplètes sont ignorées.
+- Le projet est chargé depuis le fichier JSON canonique projects/<nom>/<nom>.json.
 
 Export
 
-- Les images PNG et les CSV générés vont dans projects/<nom>/ quand un projet ouvert est renseigné. Sinon, ils vont dans output/.
+- Les images PNG générées vont dans projects/<nom>/ quand un projet ouvert est renseigné. Sinon, elles vont dans output/.
 - L'export marque le projet comme sauvegardé (dirty=False).
 
 Interface & Raccourcis
