@@ -631,17 +631,49 @@ class Editor:
         path = os.path.join(proj_dir, f"{name}.json")
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
-        # also copy latest exports (if present in OUT_DIR) and rename to project name
+        # generate exports (PNG + pose JSON) into project dir
         try:
-            import shutil
-            png_src = os.path.join(OUT_DIR, f"{name}.png")
-            # fallback: also consider old generic name
-            if not os.path.exists(png_src):
-                png_src = os.path.join(OUT_DIR, "mon_calepinage.png")
-            if os.path.exists(png_src):
-                shutil.copy(png_src, os.path.join(proj_dir, f"{name}.png"))
+            # snapshot PNG
+            room_w_px, room_h_px = int(ROOM_W * SCALE), int(ROOM_H * SCALE)
+            snapshot = pygame.Surface((room_w_px, room_h_px))
+            snapshot.fill((255, 255, 255))
+            for t in self.tiles:
+                x_px, y_px = t.x * SCALE, t.y * SCALE
+                w_px, h_px = t.w * SCALE, t.h * SCALE
+                r = pygame.Rect(x_px, y_px, w_px, h_px)
+                pygame.draw.rect(snapshot, pygame.Color(COLORS[t.fmt]), r)
+                pygame.draw.rect(snapshot, (75, 63, 47), r, 2)
+                for edge in t.cut_sides:
+                    if edge == "left":
+                        a, b = (x_px, y_px), (x_px, y_px + h_px)
+                    elif edge == "right":
+                        a, b = (x_px + w_px, y_px), (x_px + w_px, y_px + h_px)
+                    elif edge == "top":
+                        a, b = (x_px, y_px), (x_px + w_px, y_px)
+                    else:
+                        a, b = (x_px, y_px + h_px), (x_px + w_px, y_px + h_px)
+                    pygame.draw.line(snapshot, (210, 20, 20), a, b, 3)
+            png_path = os.path.join(proj_dir, f{"{name}.png"})
+            pygame.image.save(snapshot, png_path)
+            # pose JSON
+            pose_list = []
+            for t in self.tiles:
+                pose_list.append({
+                    'id': t.id,
+                    'format': t.fmt,
+                    'orientation': t.orientation or None,
+                    'x_cm': round(t.x, 1),
+                    'y_cm': round(t.y, 1),
+                    'w_cm': round(t.w, 1),
+                    'h_cm': round(t.h, 1),
+                    'base_w_cm': round(t.base_w, 1),
+                    'base_h_cm': round(t.base_h, 1),
+                    'is_cut': bool(t.is_cut),
+                })
+            with open(os.path.join(proj_dir, f"{name}_pose.json"), 'w', encoding='utf-8') as pf:
+                json.dump(pose_list, pf, indent=2, ensure_ascii=False)
         except Exception:
-            # simple top menu with buttons
+            # fallback: draw simple top menu buttons if graphics unavailable
             surf = self.screen
             base_y = 10
             x = 20
