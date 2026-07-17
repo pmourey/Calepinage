@@ -523,21 +523,29 @@ class Editor:
         if getattr(self, 'current_project', None):
             proj_dir = os.path.join(self._projects_dir(), self.current_project)
             os.makedirs(proj_dir, exist_ok=True)
-            csv_path = os.path.join(proj_dir, f"{base_name}.csv")
             png_path = os.path.join(proj_dir, f"{base_name}.png")
+            pose_path = os.path.join(proj_dir, f"{base_name}_pose.json")
         else:
-            csv_path = os.path.join(OUT_DIR, f"{base_name}.csv")
             png_path = os.path.join(OUT_DIR, f"{base_name}.png")
+            pose_path = os.path.join(OUT_DIR, f"{base_name}_pose.json")
 
-        with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(["N", "Format", "Orientation", "x_cm", "y_cm", "w_cm",
-                        "h_cm", "base_w_cm", "base_h_cm", "Decoupe"])
-            for t in self.tiles:
-                w.writerow([t.id, t.fmt, t.orientation or "-", round(t.x, 1),
-                            round(t.y, 1), round(t.w, 1), round(t.h, 1),
-                            round(t.base_w, 1), round(t.base_h, 1),
-                            "Oui" if t.is_cut else "Non"])
+        # export pose as JSON
+        pose_list = []
+        for t in self.tiles:
+            pose_list.append({
+                'id': t.id,
+                'format': t.fmt,
+                'orientation': t.orientation or None,
+                'x_cm': round(t.x, 1),
+                'y_cm': round(t.y, 1),
+                'w_cm': round(t.w, 1),
+                'h_cm': round(t.h, 1),
+                'base_w_cm': round(t.base_w, 1),
+                'base_h_cm': round(t.base_h, 1),
+                'is_cut': bool(t.is_cut),
+            })
+        with open(pose_path, 'w', encoding='utf-8') as f:
+            json.dump(pose_list, f, indent=2, ensure_ascii=False)
 
         room_w_px, room_h_px = int(ROOM_W * SCALE), int(ROOM_H * SCALE)
         snapshot = pygame.Surface((room_w_px, room_h_px))
