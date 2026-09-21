@@ -56,7 +56,7 @@ def R(v):
 class PlacedTile:
     _next_id = 1
 
-    def __init__(self, x, y, w, h, fmt, orientation, base_w=None, base_h=None):
+    def __init__(self, x, y, w, h, fmt, orientation, base_w=None, base_h=None, pattern_instance=None):
         self.id = PlacedTile._next_id
         PlacedTile._next_id += 1
         self.x, self.y, self.w, self.h = R(x), R(y), R(w), R(h)
@@ -65,6 +65,7 @@ class PlacedTile:
         self.fmt = fmt
         self.orientation = orientation
         self.cut_sides = []  # sous-ensemble de {'left','right','top','bottom'}
+        self.pattern_instance = pattern_instance  # optional id linking tile to a placed pattern
 
     def rect_cm(self):
         return (self.x, self.y, self.w, self.h)
@@ -164,15 +165,23 @@ class Editor:
 
         self.tiles = []  # PlacedTile list
         self.snap_on = True
-        self.selected = None  # PlacedTile
+        self.selected = None  # single selected PlacedTile
+        self.selected_tiles = []  # multi-selection list
         # project-specific settings (set during new project or load)
         self.project_formats = None
         self.joint_mm = JOINT_MM if 'JOINT_MM' in globals() else 5
+        self.joint_color = '#dcd6c3'  # default joint color (hex)
         self.palette = all_pieces()
+        # patterns saved in project: list of {'name':..., 'tiles':[...]} where tiles are relative
+        self.project_patterns = []
+        self._next_pattern_instance = 1
 
         # état du drag
-        self.dragging = None  # dict: kind='new'/'move', tile info, offset
+        self.dragging = None  # dict: kind='new'/'move'/'pattern', tile info, offset
         self.drag_valid = False
+
+        # selection rectangle (ctrl+drag)
+        self.select_rect = None  # (x0,y0,x1,y1) in pixels during drag
 
         self.message = ""
         self.message_timer = 0
@@ -202,7 +211,19 @@ class Editor:
         cell_h = 80
         x0 = base_x - 10
         y0 = 90
-        for idx, item in enumerate(self.palette):
+        # expand palette to include both orientations for rectangular formats
+        expanded = []
+        for item in self.palette:
+            fmt, w, h, orient, color = item
+            # always include canonical orientation
+            expanded.append((fmt, w, h, orient, color))
+            # if rectangular (w != h) also include the rotated variant
+            if abs(w - h) > EPS:
+                # rotated orientation: swap w/h and invert orientation
+                rot_orient = 'V' if orient == 'H' else 'H'
+                expanded.append((fmt, h, w, rot_orient, color))
+
+        for idx, item in enumerate(expanded):
             col = idx % cols
             row = idx // cols
             x = x0 + col * (cell_w + 12)
@@ -225,6 +246,18 @@ class Editor:
             items.append((rect, item))
         return items
 
+    def _palette_color(self, fmt: str) -> str:
+        """Return color hex for a given format name from project palette or global COLORS."""
+        # search project palette first
+        for p in self.palette:
+            if p[0] == fmt:
+                return p[4]
+        # fallback to global COLORS mapping if present
+        try:
+            return COLORS.get(fmt, '#cccccc')
+        except Exception:
+            return '#cccccc'
+
     # ---------- rendu ----------
     def draw_grid(self):
         room_w_px = ROOM_W * SCALE
@@ -234,14 +267,19 @@ class Editor:
         pygame.draw.rect(surf, (255, 255, 255), (ox, oy, room_w_px, room_h_px))
         step = SNAP_STEP * 2
         gx = 0
+        # draw grid lines using joint color (convert hex to pygame.Color)
+        try:
+            joint_col = pygame.Color(self.joint_color)
+        except Exception:
+            joint_col = pygame.Color('#dcd6c3')
         while gx <= ROOM_W + 0.001:
             x_px = ox + gx * SCALE
-            pygame.draw.line(surf, (225, 222, 214), (x_px, oy), (x_px, oy + room_h_px))
+            pygame.draw.line(surf, joint_col, (x_px, oy), (x_px, oy + room_h_px))
             gx += step
         gy = 0
         while gy <= ROOM_H + 0.001:
             y_px = oy + gy * SCALE
-            pygame.draw.line(surf, (225, 222, 214), (ox, y_px), (ox + room_w_px, y_px))
+            pygame.draw.line(surf, joint_col, (ox, y_px), (ox + room_w_px, y_px))
             gy += step
         pygame.draw.rect(surf, (20, 20, 20), (ox, oy, room_w_px, room_h_px), 2)
 
@@ -261,7 +299,14 @@ class Editor:
         col = pygame.Color(color)
         col.a = alpha
         tile_surf.fill(col)
-        pygame.draw.rect(tile_surf, (75, 63, 47, alpha), tile_surf.get_rect(), 2)
+        # draw border using joint color for visible joints
+        try:
+            jcol = pygame.Color(self.joint_color)
+            jcol.a = alpha
+            border_col = (jcol.r, jcol.g, jcol.b, jcol.a)
+        except Exception:
+            border_col = (75, 63, 47, alpha)
+        pygame.draw.rect(tile_surf, border_col, tile_surf.get_rect(), 2)
         if selected:
             pygame.draw.rect(tile_surf, (220, 30, 30, 255), tile_surf.get_rect(), 3)
         self.screen.blit(tile_surf, (px, py))
@@ -290,6 +335,8 @@ class Editor:
         base_x = max(preferred_x, min_x)
         title = self.font_bold.render("PALETTE (glisser-déposer)", True, (30, 25, 20))
         surf.blit(title, (base_x - 10, 55))
+        # show numbered badges for formats
+        palette_index = {p[0]: i+1 for i, p in enumerate(self.palette)}
         for rect, item in self.palette_rects():
             fmt, w, h, orient, color = item
             pygame.draw.rect(surf, color, rect)
@@ -298,6 +345,11 @@ class Editor:
             txt = self.font_small.render(label, True, (40, 35, 28))
             surf.blit(txt, (rect.centerx - txt.get_width() / 2,
                              rect.bottom + 3))
+            # badge
+            badge = str(palette_index.get(fmt, '?'))
+            badge_s = self.font_small.render(badge, True, (255,255,255))
+            pygame.draw.circle(surf, (30,30,30), (rect.left+10, rect.top+10), 10)
+            surf.blit(badge_s, (rect.left+4, rect.top+2))
 
     def draw_side_info(self):
         surf = self.screen
@@ -311,28 +363,31 @@ class Editor:
         cols = 2
         cell_h = 80
         y0 = 90
-        rows = (len(PALETTE) + cols - 1) // cols
+        rows = (len(self.palette) + cols - 1) // cols
         y = y0 + rows * (cell_h + 18) + 12
-        counts = {"50x50": 0, "30x50": 0, "30x30": 0}
+        # counts by format name from project palette
+        counts = {p[0]: 0 for p in self.palette}
         for t in self.tiles:
-            counts[t.fmt] += 1
+            if t.fmt in counts:
+                counts[t.fmt] += 1
+            else:
+                counts[t.fmt] = counts.get(t.fmt, 0) + 1
         surface_posee = sum(t.w * t.h for t in self.tiles) / 10000.0
         surface_totale = ROOM_W * ROOM_H / 10000.0
-        lines = [
-            ("QUANTITATIF (posé)", True),
-            (f"50x50: {counts['50x50']}", False),
-            (f"30x50: {counts['30x50']}", False),
-            (f"30x30 : {counts['30x30']}", False),
-            (f"Total : {len(self.tiles)}", False),
-            (f"Dont découpées : {sum(1 for t in self.tiles if t.is_cut)}", False),
-            ("", False),
-            (f"Surface posée : {surface_posee:.2f} m2", False),
-            (f"Surface totale : {surface_totale:.2f} m2", False),
-            (f"Couverture : {100*surface_posee/surface_totale:.1f} %", False),
-            ("", False),
-            ("Aimant grille (G) :", False),
-            ("ON" if self.snap_on else "OFF", False),
-        ]
+        # Build quantitative lines dynamically from the project palette
+        lines = []
+        lines.append(("QUANTITATIF (posé)", True))
+        for fmt, w, h, orient, color in self.palette:
+            lines.append((f"{fmt}: {counts.get(fmt,0)}", False))
+        lines.append((f"Total : {len(self.tiles)}", False))
+        lines.append((f"Dont découpées : {sum(1 for t in self.tiles if t.is_cut)}", False))
+        lines.append(("", False))
+        lines.append((f"Surface posée : {surface_posee:.2f} m2", False))
+        lines.append((f"Surface totale : {surface_totale:.2f} m2", False))
+        lines.append((f"Couverture : {100*surface_posee/surface_totale:.1f} %", False))
+        lines.append(("", False))
+        lines.append(("Aimant grille (G) :", False))
+        lines.append(("ON" if self.snap_on else "OFF", False))
         for text, bold in lines:
             f = self.font_bold if bold else self.font
             surf.blit(f.render(text, True, (35, 30, 25)), (base_x - 10, y))
@@ -344,9 +399,9 @@ class Editor:
         help_lines = [
             "Clic-glisser palette -> pose",
             "Clic-glisser carreau -> déplace",
-            "Clic droit -> supprimer",
+            "Alt+clic -> sélectionner motif entier",
+            "Suppr -> supprimer sélection/groupe",
             "R : pivoter sélection",
-            "Suppr : supprimer sélection",
             "C : tout effacer   S : exporter",
         ]
         for i, line in enumerate(help_lines):
@@ -371,6 +426,8 @@ class Editor:
 
     def handle_mousedown(self, event):
         mx, my = event.pos
+        # ensure last_mouse_pos is initialized so previews use correct start position
+        self.last_mouse_pos = (mx, my)
         # check menu buttons first (if any)
         if event.button == 1 and getattr(self, 'menu_buttons', None):
             for name, rect in self.menu_buttons.items():
@@ -387,7 +444,9 @@ class Editor:
                             pygame.quit()
                             sys.exit(0)
                     return
+        mods = pygame.key.get_mods()
         if event.button == 1:
+            # palette click -> start new tile drag
             for rect, item in self.palette_rects():
                 if rect.collidepoint(mx, my):
                     fmt, w, h, orient, color = item
@@ -395,22 +454,62 @@ class Editor:
                                       "orientation": orient, "color": color,
                                       "mouse": (mx, my)}
                     return
+            # clicked on a tile?
             t = self.tile_at_pixel(mx, my)
             if t:
-                self.selected = t
-                x_cm, y_cm = px_to_cm(mx, my)
-                self.dragging = {"kind": "move", "tile": t,
-                                  "offset": (x_cm - t.x, y_cm - t.y),
-                                  "orig": (t.x, t.y, t.w, t.h,
-                                           list(t.cut_sides))}
-            else:
-                self.selected = None
-        elif event.button == 3:
-            t = self.tile_at_pixel(mx, my)
-            if t:
-                self.tiles.remove(t)
-                if self.selected is t:
-                    self.selected = None
+                # shift toggles multi-select
+                if mods & pygame.KMOD_SHIFT:
+                    if t in self.selected_tiles:
+                        self.selected_tiles.remove(t)
+                    else:
+                        self.selected_tiles.append(t)
+                else:
+                    # normal click selects single tile
+                    # if tile belongs to a pattern instance, select the whole instance and start pattern-move drag
+                    if getattr(t, 'pattern_instance', None):
+                        pid = t.pattern_instance
+                        self.selected_tiles = [tt for tt in self.tiles if getattr(tt, 'pattern_instance', None) == pid]
+                        self.selected = None
+                        # prepare pattern-move: store start anchor (center) and raw mouse
+                        xs = []
+                        ys = []
+                        for tt in self.selected_tiles:
+                            px, py = cm_to_px(tt.x, tt.y)
+                            xs.append(px)
+                            ys.append(py)
+                            xs.append(px + tt.w * SCALE)
+                            ys.append(py + tt.h * SCALE)
+                        if xs and ys:
+                            minx, maxx = min(xs), max(xs)
+                            miny, maxy = min(ys), max(ys)
+                            center_px = (minx + maxx) / 2
+                            center_py = (miny + maxy) / 2
+                        else:
+                            center_px, center_py = mx, my
+                        start_raw = (mx, my)
+                        start_center_cm = px_to_cm(center_px, center_py)
+                        self.dragging = {'kind': 'move_pattern', 'pattern_instance': pid, 'tiles': list(self.selected_tiles), 'start_raw': start_raw, 'start_center_cm': start_center_cm}
+                        return
+                    # otherwise handle single-tile selection and move
+                    self.selected = t
+                    # prepare move drag with offset
+                    x_cm, y_cm = px_to_cm(mx, my)
+                    offset = (x_cm - t.x, y_cm - t.y)
+                    # if the clicked tile is in selected_tiles, start move_group
+                    if t in self.selected_tiles:
+                        # build offsets per tile
+                        offsets = {tt.id: (px_to_cm(mx, my)[0] - tt.x, px_to_cm(mx, my)[1] - tt.y) for tt in self.selected_tiles}
+                        self.dragging = {"kind": "move_group", "tiles": list(self.selected_tiles), "orig": [(tt.x, tt.y, tt.w, tt.h, list(tt.cut_sides)) for tt in self.selected_tiles], "mouse": (mx, my), "offsets": offsets}
+                    else:
+                        self.dragging = {"kind": "move", "tile": t, "orig": (t.x, t.y, t.w, t.h, list(t.cut_sides)), "mouse": (mx, my), "offset": offset}
+                return
+            # empty area: if Ctrl pressed, start selection rectangle
+            if mods & (pygame.KMOD_CTRL | pygame.KMOD_META):
+                self.select_rect = (mx, my, mx, my)
+                return
+            # otherwise clear selection
+            self.selected = None
+            self.selected_tiles.clear()
 
     def compute_drag(self, mx, my):
         """Calcule le rectangle nominal, le rectangle recoupé (ou None si
@@ -423,15 +522,72 @@ class Editor:
             x_cm, y_cm = px_to_cm(mx, my)
             x_cm -= w / 2
             y_cm -= h / 2
+        elif d.get("kind") == "pattern":
+            # compute pattern bounding box and position it centered at the mouse
+            pat = d.get("pattern")
+            tiles = pat.get("tiles", []) if pat else []
+            if tiles:
+                min_dx = min(ti.get('dx', 0) for ti in tiles)
+                min_dy = min(ti.get('dy', 0) for ti in tiles)
+                max_x = max(ti.get('dx', 0) + ti.get('w', 0) for ti in tiles)
+                max_y = max(ti.get('dy', 0) + ti.get('h', 0) for ti in tiles)
+                w, h = max_x - min_dx, max_y - min_dy
+            else:
+                w, h = 0, 0
+            exclude = None
+            # apply stored mouse_offset (in pixels) so preview and placement align
+            # use delta from start_raw/start_center if available for consistent placement
+            start_raw = d.get('start_raw')
+            start_center = d.get('start_center_px')
+            # Prefer applying stored mouse_offset so the pattern center stays exactly under cursor
+            off_px, off_py = d.get('mouse_offset', (0, 0))
+            mouse_warped = d.get('mouse_warped', False)
+            if mouse_warped or d.get('mouse_offset'):
+                # use mouse position plus offset to compute center
+                base_px = mx + off_px
+                base_py = my + off_py
+                try:
+                    print(f"[DEBUG][pattern place] mx,my=({mx},{my}) using offset base_px={base_px} base_py={base_py} off=({off_px},{off_py}) start_raw={d.get('start_raw')}")
+                except Exception:
+                    pass
+            elif start_raw and start_center:
+                # compute movement delta in pixels since drag start
+                cur_dx = mx - start_raw[0]
+                cur_dy = my - start_raw[1]
+                base_px = start_center[0] + cur_dx
+                base_py = start_center[1] + cur_dy
+                try:
+                    print(f"[DEBUG][pattern place] mx,my=({mx},{my}) start_raw={start_raw} start_center_px={start_center} cur_dx={cur_dx} cur_dy={cur_dy} base_px={base_px} base_py={base_py}")
+                except Exception:
+                    pass
+            else:
+                base_px = mx
+                base_py = my
+            x_cm, y_cm = px_to_cm(base_px, base_py)
+            # center pattern at mouse: subtract half size so mouse sits at pattern center
+            x_cm -= w / 2
+            y_cm -= h / 2
+            # clamp so pattern origin stays within room bounds to avoid unintended full clipping
+            x_cm = max(0.0, min(x_cm, ROOM_W - w))
+            y_cm = max(0.0, min(y_cm, ROOM_H - h))
         else:
-            t = d["tile"]
-            w, h = t.base_w, t.base_h
-            exclude = t
-            x_cm, y_cm = px_to_cm(mx, my)
-            x_cm -= d["offset"][0]
-            y_cm -= d["offset"][1]
+            t = d.get("tile")
+            if t is None:
+                # fallback to treating as new
+                x_cm, y_cm = px_to_cm(mx, my)
+                w, h = 0, 0
+                exclude = None
+            else:
+                w, h = t.base_w, t.base_h
+                exclude = t
+                x_cm, y_cm = px_to_cm(mx, my)
+                off = d.get("offset", (0, 0))
+                x_cm -= off[0]
+                y_cm -= off[1]
 
-        if self.snap_on:
+        # For pattern drags, avoid snapping/edge magnetism to prevent rounding-induced misplacements
+        do_snap = self.snap_on and d.get('kind') != 'pattern'
+        if do_snap:
             others_x = [(o.x, o.x + o.w) for o in self.tiles if o is not exclude]
             others_y = [(o.y, o.y + o.h) for o in self.tiles if o is not exclude]
             x_cm = snap_axis(x_cm, w, others_x, ROOM_W)
@@ -448,9 +604,25 @@ class Editor:
         return full_rect, clipped, (not overlap), cut_sides
 
     def handle_mouseup(self, event):
+        mx, my = event.pos
+        # finish selection rectangle if any
+        if self.select_rect:
+            x0, y0, x1, y1 = self.select_rect
+            rx0, rx1 = sorted((x0, x1))
+            ry0, ry1 = sorted((y0, y1))
+            # select tiles whose pixel rect intersects selection
+            sel = []
+            for t in self.tiles:
+                px, py = cm_to_px(t.x, t.y)
+                pw, ph = t.w * SCALE, t.h * SCALE
+                if not (px+pw < rx0 or px > rx1 or py+ph < ry0 or py > ry1):
+                    sel.append(t)
+            self.selected_tiles = sel
+            self.select_rect = None
+            return
+
         if not self.dragging or event.button != 1:
             return
-        mx, my = event.pos
         d = self.dragging
         full_rect, clipped, valid, cut_sides = self.compute_drag(mx, my)
 
@@ -465,16 +637,175 @@ class Editor:
                 self.dirty = True
             else:
                 self.set_message("Dépôt invalide (hors zone ou chevauchement)")
-        else:
-            t = d["tile"]
-            if valid:
-                t.x, t.y, t.w, t.h = clipped
-                t.cut_sides = cut_sides
+        elif d["kind"] == "move":
+            t = d.get("tile")
+            if t is None:
+                # nothing to move
+                self.set_message('Aucun tile à déplacer')
+            else:
+                if valid:
+                    t.x, t.y, t.w, t.h = clipped
+                    t.cut_sides = cut_sides
+                    self.dirty = True
+                else:
+                    t.x, t.y, t.w, t.h = d["orig"][:4]
+                    t.cut_sides = d["orig"][4]
+                    self.set_message("Déplacement invalide (hors zone ou chevauchement)")
+        elif d["kind"] == "move_group":
+            # move multiple tiles by the delta between mouse orig and current
+            mx0, my0 = d['mouse']
+            x0_cm, y0_cm = px_to_cm(mx0, my0)
+            x1_cm, y1_cm = px_to_cm(mx, my)
+            dx = x1_cm - x0_cm
+            dy = y1_cm - y0_cm
+            # apply movement and check overlaps/clipping
+            new_positions = []
+            valid_group = True
+            for (ox, oy, ow, oh, ocuts), tt in zip(d['orig'], d['tiles']):
+                nx, ny = R(ox + dx), R(oy + dy)
+                clip = clip_to_room(nx, ny, ow, oh)
+                if clip is None:
+                    # fully outside -> invalid
+                    valid_group = False
+                    break
+                cx, cy, cw, ch = clip
+                new_positions.append((tt, (cx, cy, cw, ch), compute_cut_sides((nx, ny, ow, oh), (cx, cy, cw, ch))))
+            if valid_group and not any(any(rects_overlap(pos[1], o.rect_cm()) for o in self.tiles if o not in [p[0] for p in new_positions]) for pos in new_positions):
+                # commit
+                for tt, rect, cuts in new_positions:
+                    tt.x, tt.y, tt.w, tt.h = rect
+                    tt.cut_sides = cuts
                 self.dirty = True
             else:
-                t.x, t.y, t.w, t.h = d["orig"][:4]
-                t.cut_sides = d["orig"][4]
-                self.set_message("Déplacement invalide (hors zone ou chevauchement)")
+                self.set_message('Déplacement de groupe invalide (chevauchement ou hors zone)')
+        elif d.get('kind') == 'move_pattern':
+            # reposition an existing pattern instance so its CENTER matches the preview center at release
+            tiles = d.get('tiles', [])
+            # compute original pattern bbox center in cm
+            xs = []
+            ys = []
+            for tt in tiles:
+                xs.append(tt.x)
+                ys.append(tt.y)
+                xs.append(tt.x + tt.w)
+                ys.append(tt.y + tt.h)
+            if xs and ys:
+                minx, maxx = min(xs), max(xs)
+                miny, maxy = min(ys), max(ys)
+                orig_center_x = (minx + maxx) / 2
+                orig_center_y = (miny + maxy) / 2
+            else:
+                orig_center_x, orig_center_y = 0, 0
+            # compute desired center at release (same logic as preview)
+            start_raw = d.get('start_raw')
+            start_center_cm = d.get('start_center_cm')
+            if start_raw and start_center_cm:
+                dx_cm = (mx - start_raw[0]) / SCALE
+                dy_cm = (my - start_raw[1]) / SCALE
+                center_x_cm = start_center_cm[0] + dx_cm
+                center_y_cm = start_center_cm[1] + dy_cm
+            else:
+                off = d.get('mouse_offset', (0, 0))
+                if d.get('mouse_warped'):
+                    center_px = mx + off[0]
+                    center_py = my + off[1]
+                else:
+                    center_px = mx
+                    center_py = my
+                center_x_cm, center_y_cm = px_to_cm(center_px, center_py)
+            # compute delta to move tiles
+            delta_x = center_x_cm - orig_center_x
+            delta_y = center_y_cm - orig_center_y
+            new_positions = []
+            for tt in tiles:
+                nx, ny = R(tt.x + delta_x), R(tt.y + delta_y)
+                clip = clip_to_room(nx, ny, tt.w, tt.h)
+                if clip is None:
+                    # invalid move
+                    self.set_message('Repositionnement invalide (hors zone)')
+                    new_positions = None
+                    break
+                cx, cy, cw, ch = clip
+                new_positions.append((tt, (cx, cy, cw, ch), compute_cut_sides((nx, ny, tt.w, tt.h), (cx, cy, cw, ch))))
+            if new_positions is None:
+                pass
+            elif any(any(rects_overlap(pos[1], o.rect_cm()) for o in self.tiles if o not in tiles) for pos in new_positions):
+                self.set_message('Repositionnement invalide (chevauchement)')
+            else:
+                for tt, rect, cuts in new_positions:
+                    tt.x, tt.y, tt.w, tt.h = rect
+                    tt.cut_sides = cuts
+                self.dirty = True
+        elif d.get("kind") == "pattern":
+            # place pattern at offset with clipping & cut sides
+            pat = d["pattern"]
+            # compute pattern bounding box (w,h) from tiles
+            tiles = pat.get('tiles', []) if pat else []
+            if tiles:
+                min_dx = min(ti.get('dx', 0) for ti in tiles)
+                min_dy = min(ti.get('dy', 0) for ti in tiles)
+                max_x = max(ti.get('dx', 0) + ti.get('w', 0) for ti in tiles)
+                max_y = max(ti.get('dy', 0) + ti.get('h', 0) for ti in tiles)
+                w, h = max_x - min_dx, max_y - min_dy
+            else:
+                w, h = 0, 0
+
+            # final placement: compute center based on current mouse so center at release matches preview
+            # align placement calculation with preview: prefer deterministic mouse_offset
+            off = d.get('mouse_offset', (0, 0))
+            if d.get('mouse_warped') or off != (0, 0):
+                center_px = mx + off[0]
+                center_py = my + off[1]
+                center_x_cm, center_y_cm = px_to_cm(center_px, center_py)
+            elif d.get('start_raw') and d.get('start_center_cm'):
+                start_raw = d.get('start_raw')
+                start_center_cm = d.get('start_center_cm')
+                dx_cm = (mx - start_raw[0]) / SCALE
+                dy_cm = (my - start_raw[1]) / SCALE
+                center_x_cm = start_center_cm[0] + dx_cm
+                center_y_cm = start_center_cm[1] + dy_cm
+            else:
+                center_x_cm, center_y_cm = px_to_cm(mx, my)
+            # convert center to top-left origin for placement
+            base_x = center_x_cm - w / 2
+            base_y = center_y_cm - h / 2
+            # clamp so pattern origin stays within room bounds
+            base_x = max(0.0, min(base_x, ROOM_W - w))
+            base_y = max(0.0, min(base_y, ROOM_H - h))
+            # DEBUG: log mouse and offset info to diagnose placement alignment
+            try:
+                # compute helpful diagnostics
+                base_px_calc = base_x * SCALE + GRID_ORIGIN[0]
+                base_py_calc = base_y * SCALE + GRID_ORIGIN[1]
+                origin_x_cm = x_cm
+                origin_y_cm = y_cm
+                print(f"[DEBUG][pattern place] mouse_event=({mx},{my}) mouse_offset={d.get('mouse_offset')} base_px_calc={base_px_calc:.1f} base_py_calc={base_py_calc:.1f} origin_cm=({origin_x_cm:.3f},{origin_y_cm:.3f}) clipped_cm={clipped}")
+            except Exception:
+                pass
+            placed_any = False
+            pid = str(self._next_pattern_instance)
+            for ti in pat["tiles"]:
+                px = base_x + ti["dx"]
+                py = base_y + ti["dy"]
+                # clip to room
+                clip = clip_to_room(px, py, ti["w"], ti["h"])
+                if clip is None:
+                    # skip tiles fully outside
+                    continue
+                cx, cy, cw, ch = clip
+                nt = PlacedTile(cx, cy, cw, ch, ti["fmt"], ti.get("orientation"), base_w=ti.get("base_w"), base_h=ti.get("base_h"), pattern_instance=pid)
+                nt.cut_sides = compute_cut_sides((px, py, ti["w"], ti["h"]), (cx, cy, cw, ch))
+                # skip if overlaps existing
+                if any(rects_overlap(nt.rect_cm(), o.rect_cm()) for o in self.tiles):
+                    continue
+                self.tiles.append(nt)
+                placed_any = True
+            if placed_any:
+                # increment instance counter after successful placement to ensure unique ids
+                self._next_pattern_instance += 1
+                self.dirty = True
+            else:
+                self.set_message('Placement du motif annulé (aucune tuile placée)')
         self.dragging = None
 
     def handle_keydown(self, event):
@@ -497,10 +828,20 @@ class Editor:
                     t.orientation = "H"
             else:
                 self.set_message("Rotation impossible ici")
-        elif event.key in (pygame.K_DELETE, pygame.K_BACKSPACE) and self.selected:
-            self.tiles.remove(self.selected)
-            self.selected = None
-            self.dirty = True
+        elif event.key in (pygame.K_DELETE, pygame.K_BACKSPACE):
+            # delete single selection or entire selected_tiles group
+            if self.selected and not self.selected_tiles:
+                if self.selected in self.tiles:
+                    self.tiles.remove(self.selected)
+                    self.selected = None
+                    self.dirty = True
+            elif self.selected_tiles:
+                for t in list(self.selected_tiles):
+                    if t in self.tiles:
+                        self.tiles.remove(t)
+                self.selected = None
+                self.selected_tiles.clear()
+                self.dirty = True
         elif event.key == pygame.K_g:
             self.snap_on = not self.snap_on
         elif event.key == pygame.K_c:
@@ -518,6 +859,97 @@ class Editor:
                 self._menu_new()
             elif event.key == pygame.K_s:
                 self._menu_save()
+            # Ctrl+M -> save selected tiles as pattern
+            elif event.key == pygame.K_m:
+                if self.selected_tiles:
+                    # create pattern with relative positions
+                    min_x = min(t.x for t in self.selected_tiles)
+                    min_y = min(t.y for t in self.selected_tiles)
+                    pat_tiles = []
+                    for t in self.selected_tiles:
+                        pat_tiles.append({'fmt': t.fmt, 'orientation': t.orientation, 'dx': R(t.x - min_x), 'dy': R(t.y - min_y), 'w': t.w, 'h': t.h, 'base_w': t.base_w, 'base_h': t.base_h})
+                    name = self._prompt_text('Nom du motif (laisser vide pour motif auto):', default=f'motif_{len(self.project_patterns)+1}')
+                    if not name:
+                        name = f'motif_{len(self.project_patterns)+1}'
+                    self.project_patterns.append({'name': name, 'tiles': pat_tiles})
+                    self.set_message(f"Motif '{name}' enregistré")
+                    self.dirty = True
+                else:
+                    self.set_message('Aucune sélection pour créer un motif')
+            # Ctrl+D -> duplicate pattern: show simple modal to choose
+            elif event.key == pygame.K_d:
+                if not self.project_patterns:
+                    self.set_message('Aucun motif enregistré')
+                else:
+                    # choose pattern
+                    items = [p['name'] for p in self.project_patterns]
+                    # reuse select modal
+                    sel = self._prompt_text('Choisir motif à dupliquer (nom):', default=items[0])
+                    if not sel:
+                        self.set_message('Duplication annulée')
+                    else:
+                        pat = None
+                        for p in self.project_patterns:
+                            if p['name'] == sel:
+                                pat = p
+                                break
+                        if pat is None:
+                            self.set_message('Motif introuvable')
+                        else:
+                            # start a pattern-drag: center the mouse on the pattern to avoid clipping crashes
+                            mx, my = pygame.mouse.get_pos()
+                            # compute pattern bounding box in cm from relative tile positions
+                            tiles = pat.get('tiles', []) if pat else []
+                            if tiles:
+                                xs = []
+                                ys = []
+                                for t in tiles:
+                                    dx = t.get('dx', 0)
+                                    dy = t.get('dy', 0)
+                                    w = t.get('w', t.get('base_w', 0))
+                                    h = t.get('h', t.get('base_h', 0))
+                                    xs.extend([dx, dx + w])
+                                    ys.extend([dy, dy + h])
+                                minx, maxx = min(xs), max(xs)
+                                miny, maxy = min(ys), max(ys)
+                                center_cm_x = (minx + maxx) / 2.0
+                                center_cm_y = (miny + maxy) / 2.0
+                                cx_px, cy_px = cm_to_px(center_cm_x, center_cm_y)
+                                # set mouse to center so pattern is centered under cursor during drag
+                                center_px = int(cx_px)
+                                center_py = int(cy_px)
+                                mouse_pos = (center_px, center_py)
+                            else:
+                                mouse_pos = (mx, my)
+                                center_px, center_py = mx, my
+                            # compute offset to apply to real mouse to center pattern under cursor
+                            offset = (center_px - mx, center_py - my)
+                            # DO NOT attempt to warp OS mouse (macOS may block); use deterministic offset instead
+                            mouse_warped = False
+                            # compute center position in cm from mouse + offset
+                            x_cm, y_cm = px_to_cm(mx + offset[0], my + offset[1])
+                            # DEBUG: log drag-start info
+                            try:
+                                print(f"[DEBUG][pattern start] mouse_raw=({mx},{my}) center_px=({center_px},{center_py}) offset={offset} mouse_warped={mouse_warped} center_cm=({center_cm_x:.2f},{center_cm_y:.2f})")
+                            except Exception:
+                                pass
+                            # store both offset and whether warp succeeded; also store raw start mouse and anchor (top-left) in cm
+                            start_anchor_cm = px_to_cm(mx, my)  # top-left anchor per user's choice
+                            # store both center (cm & px) so preview and placement can use consistent keys
+                            start_center_cm = (center_cm_x, center_cm_y) if tiles else px_to_cm(center_px, center_py)
+                            start_center_px = (center_px, center_py)
+                            self.dragging = {
+                                'kind': 'pattern', 'pattern': pat, 'mouse': mouse_pos,
+                                'mouse_offset': offset, 'mouse_warped': mouse_warped,
+                                'start_raw': (mx, my), 'start_anchor_cm': start_anchor_cm,
+                                'start_center_cm': start_center_cm, 'start_center_px': start_center_px
+                            }
+                            try:
+                                print(f"[DEBUG][pattern start] start_raw=({mx},{my}) anchor_cm={start_anchor_cm} offset={offset} mouse_warped={mouse_warped}")
+                                print(f"[DEBUG][pattern start] dragging={self.dragging}")
+                            except Exception:
+                                pass
+                            self.set_message(f'Déplacer pour positionner le motif "{sel}" et cliquer')
         return True
 
     def export(self):
@@ -531,24 +963,12 @@ class Editor:
             proj_dir = os.path.join(self._projects_dir(), self.current_project)
             os.makedirs(proj_dir, exist_ok=True)
             png_path = os.path.join(proj_dir, f"{base_name}.png")
-            pose_path = os.path.join(proj_dir, f"{base_name}_pose.json")
+            # export image path
+            png_path = os.path.join(proj_dir, f"{base_name}.png")
         else:
             png_path = os.path.join(OUT_DIR, f"{base_name}.png")
-            pose_path = os.path.join(OUT_DIR, f"{base_name}_pose.json")
 
-        # export project JSON (canonical filename: <name>.json)
-        project_data = {
-            'room_w': ROOM_W,
-            'room_h': ROOM_H,
-            'tiles': [
-                {'id': t.id, 'x': t.x, 'y': t.y, 'w': t.w, 'h': t.h,
-                 'fmt': t.fmt, 'orientation': t.orientation,
-                 'base_w': t.base_w, 'base_h': t.base_h,
-                 'cut_sides': list(t.cut_sides)} for t in self.tiles
-            ]
-        }
-        with open(pose_path, 'w', encoding='utf-8') as f:
-            json.dump(project_data, f, indent=2, ensure_ascii=False)
+        # export project JSON is handled by save_project(); do not write temporary pose JSON here
 
         room_w_px, room_h_px = int(ROOM_W * SCALE), int(ROOM_H * SCALE)
         snapshot = pygame.Surface((room_w_px, room_h_px))
@@ -557,7 +977,9 @@ class Editor:
             x_px, y_px = t.x * SCALE, t.y * SCALE
             w_px, h_px = t.w * SCALE, t.h * SCALE
             r = pygame.Rect(x_px, y_px, w_px, h_px)
-            pygame.draw.rect(snapshot, pygame.Color(COLORS[t.fmt]), r)
+            # determine color from project palette or global COLORS
+            col_hex = self._palette_color(t.fmt)
+            pygame.draw.rect(snapshot, pygame.Color(col_hex), r)
             pygame.draw.rect(snapshot, (75, 63, 47), r, 2)
             for edge in t.cut_sides:
                 if edge == "left":
@@ -622,9 +1044,11 @@ class Editor:
             'room_w': ROOM_W,
             'room_h': ROOM_H,
             'joint_mm': self.joint_mm,
+            'joint_color': getattr(self, 'joint_color', '#dcd6c3'),
             'palette': [
                 {'name': p[0], 'w': p[1], 'h': p[2], 'orientation': p[3], 'color': p[4]} for p in self.palette
             ],
+            'patterns': self.project_patterns,
             'tiles': [
                 {'id': t.id, 'x': t.x, 'y': t.y, 'w': t.w, 'h': t.h,
                  'fmt': t.fmt, 'orientation': t.orientation,
@@ -639,31 +1063,69 @@ class Editor:
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
         # generate standard output files for editor projects: 1_plan, 2_pose, 4_decoupes, 5_vue3d, 6_fiche_carreleur
+        # generate standard output files for editor projects: 1_plan, 2_pose, 4_decoupes, 5_vue3d, 6_fiche_carreleur
+        # run each generation step independently to avoid one failing step stopping the rest
+        # 1_plan.png
         try:
-            # 1_plan.png
-            render_plan(self.tiles, name, os.path.join(proj_dir, f"{name}_1_plan.png"))
-            # 2_pose.png (visual pose table)
-            render_pose_table_png(self.tiles, name, os.path.join(proj_dir, f"{name}_2_pose.png"))
-            # 4_decoupes.png
-            render_cuts(self.tiles, name, os.path.join(proj_dir, f"{name}_4_decoupes.png"))
-            # 5_vue3d.png
-            render_3d(self.tiles, name, os.path.join(proj_dir, f"{name}_5_vue3d.png"))
-            # write canonical project JSON as <name>.json
-            project_data = {
-                'room_w': ROOM_W,
-                'room_h': ROOM_H,
-                'tiles': [
-                    {'id': t.id, 'x': t.x, 'y': t.y, 'w': t.w, 'h': t.h,
-                     'fmt': t.fmt, 'orientation': t.orientation,
-                     'base_w': t.base_w, 'base_h': t.base_h,
-                     'cut_sides': list(t.cut_sides)} for t in self.tiles
-                ]
-            }
+            palette_map = {p[0]: p[4] for p in self.palette}
+            render_plan(self.tiles, name, os.path.join(proj_dir, f"{name}_1_plan.png"), joint_color=self.joint_color, palette_map=palette_map)
+        except TypeError:
+            # older render functions may not accept joint_color; fallback to call without
+            try:
+                render_plan(self.tiles, name, os.path.join(proj_dir, f"{name}_1_plan.png"))
+            except Exception:
+                pass
+        except Exception:
+            pass
+        # 2_pose.png (visual pose table)
+        try:
+            render_pose_table_png(self.tiles, name, os.path.join(proj_dir, f"{name}_2_pose.png"), joint_color=self.joint_color, palette_map=palette_map)
+        except TypeError:
+            try:
+                render_pose_table_png(self.tiles, name, os.path.join(proj_dir, f"{name}_2_pose.png"))
+            except Exception:
+                pass
+        except Exception:
+            pass
+        # 4_decoupes.png
+        try:
+            render_cuts(self.tiles, name, os.path.join(proj_dir, f"{name}_4_decoupes.png"), joint_color=self.joint_color, palette_map=palette_map)
+        except TypeError:
+            try:
+                render_cuts(self.tiles, name, os.path.join(proj_dir, f"{name}_4_decoupes.png"))
+            except Exception:
+                pass
+        except Exception:
+            pass
+        # 5_vue3d.png
+        try:
+            render_3d(self.tiles, name, os.path.join(proj_dir, f"{name}_5_vue3d.png"), joint_color=self.joint_color, palette_map=palette_map)
+        except TypeError:
+            try:
+                render_3d(self.tiles, name, os.path.join(proj_dir, f"{name}_5_vue3d.png"))
+            except Exception:
+                pass
+        except Exception:
+            pass
+        # write canonical project JSON as <name>.json (include joint_color)
+        # write canonical project JSON as <name>.json, include palette and joint settings
+        try:
             with open(os.path.join(proj_dir, f"{name}.json"), 'w', encoding='utf-8') as pf:
-                json.dump(project_data, pf, indent=2, ensure_ascii=False)
-            # 6_fiche_carreleur.md
+                json.dump(data, pf, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+        # 6_fiche_carreleur.md
+        try:
             q = compute_quantitatif(self.tiles)
-            quant_lines = [f"- {fmt} cm : {q.counts[fmt]} (à commander : {q.a_commander[fmt]})" for fmt in q.counts]
+            # Only include formats defined in project palette
+            tiles_total = sum(q.counts.values())
+            quant_lines = []
+            for p in self.palette:
+                fmt_name = p[0]
+                cnt = q.counts.get(fmt_name, 0)
+                to_order = q.a_commander.get(fmt_name, 0)
+                pct = round(cnt / sum(q.counts.values()) * 100, 2)
+                quant_lines.append(f"- {fmt_name} cm : {cnt} - {pct} % (à commander : {to_order})")
             fiche_lines = [
                 f"# Fiche carreleur — {name}",
                 "",
@@ -679,21 +1141,7 @@ class Editor:
             with open(os.path.join(proj_dir, f"{name}_6_fiche_carreleur.md"), 'w', encoding='utf-8') as ff:
                 ff.write('\n'.join(fiche_lines))
         except Exception:
-            # fallback: draw simple top menu buttons if graphics unavailable
-            surf = self.screen
-            base_y = 10
-            x = 20
-            buttons = ['Ouvrir','Nouveau','Sauvegarder','Quitter']
-            self.menu_buttons.clear()
-            for b in buttons:
-                txt = self.font.render(b, True, (255,255,255))
-                w = txt.get_width()+12
-                h = 24
-                rect = pygame.Rect(x, base_y, w, h)
-                pygame.draw.rect(surf, (60,60,60), rect, border_radius=4)
-                surf.blit(txt, (x+6, base_y+4))
-                self.menu_buttons[b]=rect
-                x += w+8
+            pass
         self.current_project = name
         # mark saved
         self.dirty = False
@@ -709,17 +1157,29 @@ class Editor:
                 data = json.load(f)
             # load project-level settings if present
             self.joint_mm = data.get('joint_mm', self.joint_mm)
+            self.joint_color = data.get('joint_color', getattr(self, 'joint_color', '#dcd6c3'))
             pal = data.get('palette') or []
             if pal:
                 self.palette = [(p.get('name'), p.get('w'), p.get('h'), p.get('orientation'), p.get('color')) for p in pal]
+            # load patterns
+            self.project_patterns = data.get('patterns', []) or []
             tiles_from_json = data.get('tiles', []) or []
             self.tiles.clear()
             for td in tiles_from_json:
                 nt = PlacedTile(td['x'], td['y'], td['w'], td['h'], td['fmt'],
                                 td.get('orientation'), base_w=td.get('base_w'),
-                                base_h=td.get('base_h'))
+                                base_h=td.get('base_h'), pattern_instance=td.get('pattern_instance'))
                 nt.cut_sides = td.get('cut_sides', [])
                 self.tiles.append(nt)
+            # restore next pattern instance id to avoid collisions
+            max_pid = 0
+            for t in self.tiles:
+                if getattr(t, 'pattern_instance', None):
+                    try:
+                        max_pid = max(max_pid, int(t.pattern_instance))
+                    except Exception:
+                        pass
+            self._next_pattern_instance = max(self._next_pattern_instance, max_pid + 1)
             self.current_project = name
             # loaded from disk -> not dirty
             self.dirty = False
@@ -934,17 +1394,53 @@ class Editor:
         if not _ask_save_if_dirty(self):
             return
         name = self._prompt_text('Nom du nouveau projet :', default='mon_calepinage')
-        if name:
-            if name in self.list_projects():
-                if not self._confirm(f"Le projet '{name}' existe. Le sélectionner ?"):
-                    self.set_message('Création annulée')
-                    return
-                else:
-                    self.load_project(name)
-                    return
-            self.tiles.clear()
-            self.current_project = name
-            self.save_project(name)
+        if not name:
+            self.set_message('Création annulée')
+            return
+        # if exists, confirm selection/overwrite
+        if name in self.list_projects():
+            if self._confirm(f"Le projet '{name}' existe. Le sélectionner ?"):
+                self.load_project(name)
+                return
+            else:
+                self.set_message('Création annulée')
+                return
+        # ask project-level settings
+        joint_s = self._prompt_text('Largeur de joint recommandée (mm) :', default=str(self.joint_mm))
+        try:
+            joint_val = float(joint_s) if joint_s else self.joint_mm
+        except Exception:
+            joint_val = self.joint_mm
+        # joint color
+        joint_color = self._prompt_color_picker('Choisir couleur pour les joints')
+        # number of formats
+        n_s = self._prompt_text('Nombre de formats de carreaux à définir :', default='2')
+        try:
+            n = max(1, int(n_s))
+        except Exception:
+            n = 2
+        palette = []
+        for i in range(n):
+            fmt_name = self._prompt_text(f'Nom format #{i+1} (ex: 30x50) :', default=f'{30+i*10}x{30+i*10}')
+            if not fmt_name:
+                fmt_name = f'{30+i*10}x{30+i*10}'
+            dim_s = self._prompt_text(f'Dimensions (LxH en cm) pour {fmt_name} (ex: 30x50) :', default='30x30')
+            color = self._prompt_color_picker(f'Choisir couleur pour {fmt_name}')
+            try:
+                w_s, h_s = dim_s.lower().split('x')
+                w = float(w_s)
+                h = float(h_s)
+            except Exception:
+                w, h = 30.0, 30.0
+            orientation = 'H' if w >= h else 'V'
+            palette.append((fmt_name, w, h, orientation, color))
+        # initialize empty state and save with project-specific palette and joint
+        self.tiles.clear()
+        self.current_project = name
+        self.palette = palette
+        self.joint_mm = joint_val
+        self.joint_color = joint_color
+        self.save_project(name)
 
     def _menu_save(self):
         if getattr(self, 'current_project', None):
@@ -1034,6 +1530,9 @@ class Editor:
                 print(f"[FRAME {frame}] tiles={len(self.tiles)} current_project={getattr(self,'current_project',None)} dirty={self.dirty}")
             frame += 1
             for event in pygame.event.get():
+                # track raw mouse movements for reliable drag previews
+                if event.type == pygame.MOUSEMOTION:
+                    self.last_mouse_pos = event.pos
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.VIDEORESIZE:
@@ -1076,16 +1575,133 @@ class Editor:
             self.draw_grid()
             for t in self.tiles:
                 sel = (t is self.selected) and self.dragging is None
-                self.draw_tile(t.rect_cm(), COLORS[t.fmt], selected=sel,
-                                label=f"#{t.id}", cut_edges=t.cut_sides)
+                multi_sel = t in self.selected_tiles
+                # color resolved from project palette first, then global COLORS
+                # label now shows format index instead of tile id
+                try:
+                    palette_index = {p[0]: i+1 for i, p in enumerate(self.palette)}
+                    fmt_label = str(palette_index.get(t.fmt, ''))
+                except Exception:
+                    fmt_label = ''
+                self.draw_tile(t.rect_cm(), self._palette_color(t.fmt), selected=sel or multi_sel,
+                                label=fmt_label if fmt_label else None, cut_edges=t.cut_sides)
+
+            # draw colored outlines around each placed pattern instance for visibility
+            instances = {}
+            for t in self.tiles:
+                pid = getattr(t, 'pattern_instance', None)
+                if pid:
+                    if pid not in instances:
+                        instances[pid] = []
+                    instances[pid].append(t)
+            if instances:
+                # small palette of distinct outline colors
+                outline_colors = [(200,30,30),(30,120,200),(50,160,60),(160,60,160),(200,120,30),(30,180,180)]
+                for i, (pid, tiles_group) in enumerate(instances.items()):
+                    xs = []
+                    ys = []
+                    x2s = []
+                    y2s = []
+                    for tt in tiles_group:
+                        px, py = cm_to_px(tt.x, tt.y)
+                        pw, ph = tt.w * SCALE, tt.h * SCALE
+                        xs.append(px)
+                        ys.append(py)
+                        x2s.append(px + pw)
+                        y2s.append(py + ph)
+                    minx, miny = min(xs), min(ys)
+                    maxx, maxy = max(x2s), max(y2s)
+                    color = outline_colors[i % len(outline_colors)]
+                    rect = pygame.Rect(minx-3, miny-3, (maxx-minx)+6, (maxy-miny)+6)
+                    pygame.draw.rect(self.screen, color, rect, 3)
 
             if self.dragging:
-                mx, my = pygame.mouse.get_pos()
-                full_rect, clipped, valid, cut_sides = self.compute_drag(mx, my)
-                preview = clipped if clipped is not None else full_rect
-                color = "#8fd18f" if valid else "#e58b8b"
-                self.draw_tile(preview, color, alpha=170,
-                                cut_edges=cut_sides if valid else [])
+                mx, my = getattr(self, 'last_mouse_pos', pygame.mouse.get_pos())
+                d = self.dragging
+                # compute preview center and bounding box in px for additional visuals
+                preview_center_px = None
+                preview_bbox_px = None
+                if d.get('kind') == 'pattern':
+                    # preview exact tiles of the pattern at mouse position
+                    # compute base using delta from initial raw mouse to keep preview aligned with movement
+                    start_raw = d.get('start_raw')
+                    start_center_cm = d.get('start_center_cm')
+                    if start_raw and start_center_cm:
+                        dx_px = mx - start_raw[0]
+                        dy_px = my - start_raw[1]
+                        dx_cm = dx_px / SCALE
+                        dy_cm = dy_px / SCALE
+                        base_x_cm = start_center_cm[0] + dx_cm
+                        base_y_cm = start_center_cm[1] + dy_cm
+                    else:
+                        off_x, off_y = d.get('mouse_offset', (0, 0))
+                        base_x_px = mx + off_x
+                        base_y_px = my + off_y
+                        base_x_cm, base_y_cm = px_to_cm(base_x_px, base_y_px)
+                    pat = d.get('pattern')
+                    if pat:
+                        # gather bbox in px while drawing tiles
+                        xs, ys, x2s, y2s = [], [], [], []
+                        for ti in pat.get('tiles', []):
+                            px_cm = base_x_cm + ti['dx']
+                            py_cm = base_y_cm + ti['dy']
+                            full = (px_cm, py_cm, ti['w'], ti['h'])
+                            clipped = clip_to_room(*full)
+                            if clipped is None:
+                                continue
+                            # check overlap
+                            overlap = any(rects_overlap(clipped, o.rect_cm()) for o in self.tiles)
+                            valid = not overlap
+                            draw_color = "#8fd18f" if valid else "#e58b8b"
+                            # show tile preview (semi-transparent)
+                            self.draw_tile(clipped if clipped is not None else full, draw_color, alpha=160,
+                                           cut_edges=compute_cut_sides(full, clipped) if clipped is not None else [])
+                            # add to bbox lists
+                            px_px, py_px = cm_to_px(clipped[0], clipped[1]) if clipped is not None else cm_to_px(full[0], full[1])
+                            pw_px, ph_px = (clipped[2] * SCALE, clipped[3] * SCALE) if clipped is not None else (full[2] * SCALE, full[3] * SCALE)
+                            xs.append(px_px); ys.append(py_px); x2s.append(px_px + pw_px); y2s.append(py_px + ph_px)
+                        if xs:
+                            minx, miny = min(xs), min(ys)
+                            maxx, maxy = max(x2s), max(y2s)
+                            preview_bbox_px = (minx, miny, maxx, maxy)
+                            preview_center_px = ((minx + maxx) // 2, (miny + maxy) // 2)
+                else:
+                    full_rect, clipped, valid, cut_sides = self.compute_drag(mx, my)
+                    preview = clipped if clipped is not None else full_rect
+                    color = "#8fd18f" if valid else "#e58b8b"
+                    self.draw_tile(preview, color, alpha=170,
+                                    cut_edges=cut_sides if valid else [])
+                    # compute bbox and center for single-tile preview
+                    px_px, py_px = cm_to_px(preview[0], preview[1])
+                    pw_px, ph_px = preview[2] * SCALE, preview[3] * SCALE
+                    preview_bbox_px = (px_px, py_px, px_px + pw_px, py_px + ph_px)
+                    preview_center_px = (int(px_px + pw_px/2), int(py_px + ph_px/2))
+
+                # draw outline around preview bbox
+                if preview_bbox_px:
+                    minx, miny, maxx, maxy = preview_bbox_px
+                    outline_rect = pygame.Rect(minx-4, miny-4, (maxx-minx)+8, (maxy-miny)+8)
+                    pygame.draw.rect(self.screen, (30, 144, 60), outline_rect, 3)
+                    # draw center marker
+                    if preview_center_px:
+                        cx, cy = preview_center_px
+                        pygame.draw.circle(self.screen, (10,10,10), (cx, cy), 5)
+                        pygame.draw.circle(self.screen, (255,255,255), (cx, cy), 3)
+                        # numeric display of center in cm
+                        cx_cm, cy_cm = px_to_cm(cx, cy)
+                        txt = f"C: {cx_cm:.2f}cm, {cy_cm:.2f}cm"
+                        txt_surf = self.font.render(txt, True, (40,40,40))
+                        # draw background box for readability
+                        bx, by = cx + 10, cy - 10
+                        bg = pygame.Surface((txt_surf.get_width()+6, txt_surf.get_height()+4), pygame.SRCALPHA)
+                        bg.fill((250,250,250,220))
+                        self.screen.blit(bg, (bx, by - 2))
+                        self.screen.blit(txt_surf, (bx+3, by))
+
+                # crosshair under cursor
+                pygame.draw.line(self.screen, (120,120,120), (mx-12, my), (mx+12, my), 1)
+                pygame.draw.line(self.screen, (120,120,120), (mx, my-12), (mx, my+12), 1)
+                pygame.draw.circle(self.screen, (120,120,120), (mx, my), 3, 1)
 
             self.draw_palette()
             self.draw_side_info()

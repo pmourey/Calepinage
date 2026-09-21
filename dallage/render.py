@@ -12,23 +12,43 @@ from .layout_engine import Tile
 FIG_DPI = 150
 
 
-def _draw_tile(ax, t: Tile, show_id=True):
-    color = COLORS["cut"] if t.is_cut else COLORS[t.fmt]
+def _draw_tile(ax, t: Tile, show_id=True, joint_color=None, palette_map=None):
+    # safe color lookup
+    try:
+        if palette_map and t.fmt in palette_map:
+            color = palette_map[t.fmt]
+        else:
+            color = COLORS["cut"] if t.is_cut else COLORS.get(t.fmt, "#f2efe6")
+    except Exception:
+        color = "#f2efe6"
+    edge = joint_color if joint_color is not None else "#4b3f2f"
     rect = patches.Rectangle((t.x, ROOM_H - t.y - t.h), t.w, t.h,
-                              linewidth=1.1, edgecolor="#4b3f2f",
-                              facecolor=color)
+                              linewidth=1.1, edgecolor=edge,
+                              facecolor=color, zorder=2)
     ax.add_patch(rect)
     if show_id:
         label = f"{t.id}"
         ax.text(t.x + t.w / 2, ROOM_H - t.y - t.h / 2, label,
-                ha="center", va="center", fontsize=5.2, color="#3a3226")
+                ha="center", va="center", fontsize=5.2, color="#3a3226", zorder=3)
 
 
-def render_plan(tiles, title, out_path, room_w=ROOM_W, room_h=ROOM_H):
-    """Plan de calepinage d'architecte : cotes, numérotation, orientation."""
+def render_plan(tiles, title, out_path, room_w=ROOM_W, room_h=ROOM_H, joint_color=None, palette_map=None):
+    """Plan de calepinage d'architecte : cotes, numérotation, orientation.
+    joint_color: optional hex string used for tile edges / grid lines."""
     fig, ax = plt.subplots(figsize=(9, 10), dpi=FIG_DPI)
+    # draw faint grid in joint color first (so tiles appear on top)
+    if joint_color is not None:
+        try:
+            jc = joint_color
+            step = 5
+            for gx in np.arange(0, room_w + 0.1, step):
+                ax.plot([gx, gx], [-10, room_h+10], color=jc, alpha=0.08, zorder=0)
+            for gy in np.arange(0, room_h + 0.1, step):
+                ax.plot([-10, room_w+10], [gy, gy], color=jc, alpha=0.08, zorder=0)
+        except Exception:
+            pass
     for t in tiles:
-        _draw_tile(ax, t)
+        _draw_tile(ax, t, joint_color=joint_color, palette_map=palette_map)
 
     ax.set_xlim(-35, room_w + 35)
     ax.set_ylim(-35, room_h + 60)
@@ -39,6 +59,18 @@ def render_plan(tiles, title, out_path, room_w=ROOM_W, room_h=ROOM_H):
     # Cadre du garage
     ax.add_patch(patches.Rectangle((0, 0), room_w, room_h, fill=False,
                                     edgecolor="black", linewidth=2.2))
+    # draw faint grid lines in joint color if provided
+    if joint_color is not None:
+        try:
+            jc = joint_color
+            # draw simple grid at 5cm step
+            step = 5
+            for gx in np.arange(0, room_w + 0.1, step):
+                ax.add_patch(patches.Rectangle((gx, -1e6), 0.01, 2e6, facecolor=jc, alpha=0.08))
+            for gy in np.arange(0, room_h + 0.1, step):
+                ax.add_patch(patches.Rectangle((-1e6, gy), 2e6, 0.01, facecolor=jc, alpha=0.08))
+        except Exception:
+            pass
 
     # Cotation largeur (bas)
     y_cote = -18
@@ -70,7 +102,7 @@ def render_plan(tiles, title, out_path, room_w=ROOM_W, room_h=ROOM_H):
     plt.close(fig)
 
 
-def render_cuts(tiles, title, out_path, room_w=ROOM_W, room_h=ROOM_H):
+def render_cuts(tiles, title, out_path, room_w=ROOM_W, room_h=ROOM_H, joint_color=None, palette_map=None):
     """Plan des découpes uniquement, avec dimensions exactes annotées."""
     fig, ax = plt.subplots(figsize=(9, 10), dpi=FIG_DPI)
     ax.add_patch(patches.Rectangle((0, 0), room_w, room_h, fill=False,
@@ -79,9 +111,10 @@ def render_cuts(tiles, title, out_path, room_w=ROOM_W, room_h=ROOM_H):
     cuts = [t for t in tiles if t.is_cut]
     for t in tiles:
         base_color = "#f2efe6" if not t.is_cut else COLORS["cut"]
+        edge = joint_color if joint_color is not None else "#a89f8c"
         rect = patches.Rectangle((t.x, room_h - t.y - t.h), t.w, t.h,
-                                  linewidth=0.6, edgecolor="#a89f8c",
-                                  facecolor=base_color, alpha=0.9 if t.is_cut else 0.35)
+                                  linewidth=0.6, edgecolor=edge,
+                                  facecolor=base_color, alpha=0.9 if t.is_cut else 0.35, zorder=2)
         ax.add_patch(rect)
     for t in cuts:
         cx, cy = t.x + t.w / 2, room_h - t.y - t.h / 2
@@ -100,7 +133,7 @@ def render_cuts(tiles, title, out_path, room_w=ROOM_W, room_h=ROOM_H):
     plt.close(fig)
 
 
-def render_pose_table_png(tiles, title, out_path, max_rows=40):
+def render_pose_table_png(tiles, title, out_path, max_rows=40, joint_color=None, palette_map=None):
     """Rend un tableau de pose (N°, format, orientation) en image, complet en
     CSV à côté (voir generate_all.py)."""
     fig, ax = plt.subplots(figsize=(6, min(0.24 * len(tiles) + 1.2, 24)), dpi=120)
@@ -119,9 +152,10 @@ def render_pose_table_png(tiles, title, out_path, max_rows=40):
     plt.close(fig)
 
 
-def render_3d(tiles, title, out_path, room_w=ROOM_W, room_h=ROOM_H):
+def render_3d(tiles, title, out_path, room_w=ROOM_W, room_h=ROOM_H, joint_color=None, palette_map=None):
     """Vue 3D artistique simplifiée : projection en perspective du plan 2D
-    (les dalles gardent leurs proportions réelles avant projection)."""
+    (les dalles gardent leurs proportions réelles avant projection).
+    joint_color: optional hex used for tile edges/shading."""
     fig, ax = plt.subplots(figsize=(9, 7), dpi=FIG_DPI)
 
     # Perspective simple : point de fuite en haut, la profondeur (longueur,
@@ -143,12 +177,19 @@ def render_3d(tiles, title, out_path, room_w=ROOM_W, room_h=ROOM_H):
         corners = [(t.x, t.y), (t.x + t.w, t.y), (t.x + t.w, t.y + t.h),
                    (t.x, t.y + t.h)]
         poly = [project(cx, cy) for cx, cy in corners]
-        color = COLORS["cut"] if t.is_cut else COLORS[t.fmt]
+        try:
+            if palette_map and t.fmt in palette_map:
+                color = palette_map[t.fmt]
+            else:
+                color = COLORS["cut"] if t.is_cut else COLORS.get(t.fmt, "#f2efe6")
+        except Exception:
+            color = "#f2efe6"
         shade = 1.0 - 0.15 * (t.y / room_h)  # légère ombre en profondeur
         rgb = matplotlib.colors.to_rgb(color)
         rgb = tuple(c * shade for c in rgb)
+        edge = joint_color if joint_color is not None else "#3a3226"
         ax.add_patch(patches.Polygon(poly, closed=True, facecolor=rgb,
-                                      edgecolor="#3a3226", linewidth=0.5))
+                                      edgecolor=edge, linewidth=0.5, zorder=2))
 
     ax.set_xlim(-20, room_w + 20)
     ax.set_ylim(-5, room_h * height_scale + 15)

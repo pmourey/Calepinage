@@ -14,9 +14,9 @@ JOINT_MM = 6  # largeur de joint recommandée (mm)
 
 # Formats de carreaux disponibles (cm) : {nom: (dimension_a, dimension_b)}
 FORMATS = {
-    "50x50": (50, 50),
-    "30x50": (30, 50),
-    "30x30": (30, 30),
+    "40x40": (40, 40),
+    "20x20": (20, 20),
+    "40x20": (40, 20),
 }
 
 _DEFAULT_PALETTE_COLORS = [
@@ -24,9 +24,9 @@ _DEFAULT_PALETTE_COLORS = [
 ]
 
 COLORS = {
-    "50x50": "#d8c9a3",   # beige soutenu (ancrage)
-    "30x50": "#e9dcc0",   # beige clair
-    "30x30": "#c9b98f",   # beige gris
+    "40x40": "#d8c9a3",   # beige soutenu (ancrage)
+    "20x20": "#e9dcc0",   # beige clair
+    "40x20": "#c9b98f",   # beige gris
     "cut": "#f2a6a6",     # rose : signalement d'une découpe
 }
 

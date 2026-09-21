@@ -1,5 +1,9 @@
 Réaliser **trois planches de présentation complètes**, dans le même esprit que celles que vous avez appréciées, mais **beaucoup plus précises**, avec les **vraies dimensions** des carreaux.
 
+Schéma 66 Point P - 3 formats
+
+https://share.google/aimode/wHROOfeX5SRGBFlOa
+
 ### 📐 Proposition 1 – Opus contemporain (ma préférée) ⭐⭐⭐⭐⭐
 
 Le rendu s'inspirera des dallages modernes de terrasses haut de gamme.
